@@ -1,6 +1,6 @@
 {
   "name": "dsh-session-titler",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "type": "module",
   "description": "DSH 会话标题生成器：把整个会话总结成一条新标题，确认后才写入。Session title generator for DeepSeek Harness: summarize the whole session into one title, then confirm before applying it.",
   "license": "MIT",
