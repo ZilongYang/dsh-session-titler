@@ -253,24 +253,60 @@ gh pr create --repo awesome-dsh-plugin/awesome-dsh-plugin --head ZilongYang:add-
 | 远端 manifest | 已在远端确认含 `dsh.bundle: { "patch": "./cordis.patch.yml" }`，无 `private` |
 | 社区市场 PR | <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6327> —— 只新增 `data/plugins/ZilongYang__dsh-session-titler.yml`（+6 −0），`category: session` |
 | npm 包内容 | `npm pack --dry-run` → 13 个文件，**不含** `private/` 与 `.npm-cache/` |
+| **npm 发布** | **`dsh-session-titler@0.1.0` 已发布**（2026-10-01）。`repository` 指回本仓库，`dist.fileCount = 13` |
 
-### 未完成 / 阻塞
+### npm 发布：踩到的两个坑（留档）
 
-**npm 发布被账号 2FA 拦住。** `npm publish` 返回：
+**坑 1 —— 账号开了 2FA 时，普通 token 发不出去。** `npm publish` 连续返回：
 
 ```
 E403 … Two-factor authentication or granular access token with bypass 2fa enabled is required to publish packages.
 ```
 
-排查过程与结论：粒度 token 本身已正确（`permissions: package/write`、90 天有效期），但 npm 侧元数据显示 `bypass_2fa: false` —— 缺的是创建 token 时 **「Bypass two-factor authentication (2FA)」** 那个勾。两条解法：
+诊断方法不是猜，而是直接读 token 元数据：
 
-1. 重建 Granular Access Token 并勾上该框，再 `npm config set //registry.npmjs.org/:_authToken=<token>`；
-2. 在终端跑一次 `npm publish --otp=<6位码>`。
+```sh
+curl -sS -H "Authorization: Bearer $(awk -F= '/_authToken/{print $2}' ~/.npmrc)" \
+  https://registry.npmjs.org/-/npm/v1/tokens
+```
 
-发布完成后市场会**自动**从 npm registry 采集关联（条目里不需要、也不允许手写 `npm:` 字段）。
+`npm login` 产生的会话 token 会带一个约 24 小时的 `expiry`；而**粒度 token** 即便权限正确
+（`permissions: [{"name":"package","action":"write"}]`），只要缺 `"bypass_2fa": true` 就仍然发不出去。
+创建粒度 token 时，「Bypass two-factor authentication (2FA)」是一个**独立复选框**，需要单独勾选。
 
-### CI 预期
+⚠️ **后续注意**：npm 已在 2026-07 公告收紧 bypass-2FA token——账号类操作从 2026-08 起、**直接发布从 2027-01 起**将不再支持。
+2027 年起本仓库发版应改用 `npm publish --otp=<6位码>`，或配置 Trusted Publishing（OIDC）。
 
-条目数（1 ≤ 3）→ `dsh.bundle` ✅ → **仓库年龄**（仓库创建于 2026-10-01，**先红**）→ awesome-lint 与站点构建。
-`regate.yml` 每 6 小时重跑，约 24 小时内自动变绿；期间**不** push 空提交、**不**重开 PR。
+**坑 2 —— 发布前反复探测包名，会把 404 缓存进 CDN。** 发布成功后一段时间内：
+
+- `registry.npmjs.org/dsh-session-titler` 与 tarball 直链仍返回 `{"error":"Not found"}`（加 cache-buster 也命中缓存）；
+- 但 `registry.npmjs.org/dsh-session-titler/0.1.0`（版本端点）**已经是 200**，`npmjs.com` 页面也已显示 `0.1.0 • Public`。
+
+结论：**负缓存会自动过期**（本次约 10 分钟）。判断「到底发出去没有」要看**版本端点**与 **npm 官网页面**，不要只看 packument。
+
+### 成品审计（从 registry 重新拉取）
+
+```sh
+npm --cache /tmp/dsh-npm-cache pack dsh-session-titler@0.1.0 --pack-destination /tmp
+tar tzf /tmp/dsh-session-titler-0.1.0.tgz | sort
+```
+
+结果：**13 个文件**，与 `files` 白名单逐项一致，**无 `private/`、无 `.npm-cache/`**：
+
+```
+package/LICENSE  package/README.md  package/client.js  package/cordis.patch.yml
+package/docs/01-plugin-design-and-implementation.md
+package/docs/02-open-source-and-marketplace.md
+package/fence.js  package/icon.svg  package/index.js
+package/locale/{en,zh}.json  package/package.json  package/title.js
+```
+
+### CI 结论（已出）
+
+- `check` ✅ **通过**（`8m13s`）
+- `Submission gate` ❌ —— **唯一失败项是仓库年龄**，原文：
+  > `repository is 0.0 days old (needs 1) — nothing to do: this check re-runs by itself and should clear in about 24h. No need to resubmit, push, or close and reopen; the age bar is the only thing failing here.`
+
+即 `dsh.bundle`、条目数、格式 lint **全部已通过**，只等 24 小时年龄门槛自动清零。期间**不** push 空提交、**不**重开 PR。
+
 
