@@ -309,4 +309,49 @@ package/locale/{en,zh}.json  package/package.json  package/title.js
 
 即 `dsh.bundle`、条目数、格式 lint **全部已通过**，只等 24 小时年龄门槛自动清零。期间**不** push 空提交、**不**重开 PR。
 
+### 0.1.2 发版记录（2026-10-02）
+
+**发版原因**：0.1.1 的「已注册 adapter 校验」只加在冷会话分支，活会话把日志里最后一条路由（`opencode-go-new`）原样拿去调用，换成没有该 provider 的 profile 后直接 502 `no adapter registered`。根因、证据与修法见 `docs/01` 附录 **A5**。
+
+**提交与推送**：
+
+```sh
+# 36ed227 fix: validate the recorded model route for live sessions too
+# 9ca1796 docs: record the live-session route gap and the fallback note
+# da6285f chore(release): 0.1.2 — validate routed providers for live sessions
+git push origin main                # d025362..da6285f
+```
+
+**发布**：
+
+```sh
+npm --cache /tmp/dsh-npm-cache publish
+```
+
+- 结果：`+ dsh-session-titler@0.1.2`；npm debug 日志确认 `http fetch PUT 202 https://registry.npmjs.org/dsh-session-titler`（服务端已接收，未触发 OTP——现有粒度 token 的 bypass-2FA 仍有效）。
+- **包内容未变**：13 个文件，同 0.1.0 的白名单；`test/` 不在 `files` 里，故不进包。
+- 读接口依旧滞后（与「坑 2」同一现象，但这次连**版本端点也还是 404**）：
+
+  ```
+  curl -s "https://registry.npmjs.org/dsh-session-titler/0.1.2?cb=$RANDOM"  → "version not found: 0.1.2"
+  curl -s "https://registry.npmjs.org/dsh-session-titler"                   → dist-tags.latest 仍为 0.1.1
+  ```
+
+- 本轮额外碰到两次 `curl: (35) LibreSSL SSL_connect: SSL_ERROR_SYSCALL in connection to registry.npmjs.org:443`（本地代理抖动），第三次即恢复正常；与发布结果无关，判断依据仍取 **PUT 状态码 + npm 命令回显**。
+- 判定「发出去了没有」的标准不变：**版本端点 / npm 官网页面**为准，负缓存约 10 分钟过期。
+
+**复验（CDN 刷新后）**：
+
+```sh
+curl -s "https://registry.npmjs.org/dsh-session-titler/0.1.2?cb=$RANDOM" | head -c 200
+npm --cache /tmp/dsh-npm-cache pack dsh-session-titler@0.1.2 --pack-destination /tmp
+tar xzOf /tmp/dsh-session-titler-0.1.2.tgz package/title.js | grep -c routeCandidates   # 期望 ≥ 2
+```
+
+**安装侧提醒**：CDN 刷新前 `/install` 与市场装到的仍是 `0.1.1`。本机 DSH Next 的 `main` profile 已从 `link:` 回滚到 npm `0.1.1`（`~/.dsh/profiles/main/node_modules/dsh-session-titler/title.js` 里 `routeCandidates` 计数为 0，即**当前无修复**）；CDN 刷新后需退出 App 再执行：
+
+```sh
+dsh plugin --profile main add dsh-session-titler@0.1.2
+```
+
 
