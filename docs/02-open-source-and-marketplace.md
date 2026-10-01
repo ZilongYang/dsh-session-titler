@@ -239,6 +239,38 @@ gh pr create --repo awesome-dsh-plugin/awesome-dsh-plugin --head ZilongYang:add-
 
 ---
 
-## 附录：执行结果（执行后回填）
+## 附录：执行结果（2026-10-01）
 
-> 待回填：仓库 URL、首次提交、npm 版本、PR 号与 CI 状态、验证清单结论。
+### 已完成
+
+| 环节 | 结果 |
+|---|---|
+| 文档归档 | `docs/` 两份脱敏版 + `private/` 原始副本与脱敏对照表（`private/` 已被 `.gitignore` 忽略） |
+| 开源化改造 | 去掉 `private`，补 `repository` / `homepage` / `bugs` / `keywords` / `engines`，新增 `LICENSE`、`.gitignore` |
+| 首次提交 | 2 个提交：`feat: DSH session titler — whole-session title proposal with confirm-first rename`、`chore: LICENSE, .gitignore and design/marketplace docs` |
+| 提交身份脱敏 | 仓库级 `user.email` 用 GitHub noreply；`git log --format='%ae %ce' \| grep -c gmail` → **0**；全局 git 配置未改动 |
+| 公开仓库 | <https://github.com/ZilongYang/dsh-session-titler>（PUBLIC），topics：`dsh-plugin` / `dsh` / `deepseek-harness` |
+| 远端 manifest | 已在远端确认含 `dsh.bundle: { "patch": "./cordis.patch.yml" }`，无 `private` |
+| 社区市场 PR | <https://github.com/awesome-dsh-plugin/awesome-dsh-plugin/pull/6327> —— 只新增 `data/plugins/ZilongYang__dsh-session-titler.yml`（+6 −0），`category: session` |
+| npm 包内容 | `npm pack --dry-run` → 13 个文件，**不含** `private/` 与 `.npm-cache/` |
+
+### 未完成 / 阻塞
+
+**npm 发布被账号 2FA 拦住。** `npm publish` 返回：
+
+```
+E403 … Two-factor authentication or granular access token with bypass 2fa enabled is required to publish packages.
+```
+
+排查过程与结论：粒度 token 本身已正确（`permissions: package/write`、90 天有效期），但 npm 侧元数据显示 `bypass_2fa: false` —— 缺的是创建 token 时 **「Bypass two-factor authentication (2FA)」** 那个勾。两条解法：
+
+1. 重建 Granular Access Token 并勾上该框，再 `npm config set //registry.npmjs.org/:_authToken=<token>`；
+2. 在终端跑一次 `npm publish --otp=<6位码>`。
+
+发布完成后市场会**自动**从 npm registry 采集关联（条目里不需要、也不允许手写 `npm:` 字段）。
+
+### CI 预期
+
+条目数（1 ≤ 3）→ `dsh.bundle` ✅ → **仓库年龄**（仓库创建于 2026-10-01，**先红**）→ awesome-lint 与站点构建。
+`regate.yml` 每 6 小时重跑，约 24 小时内自动变绿；期间**不** push 空提交、**不**重开 PR。
+
