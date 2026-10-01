@@ -348,6 +348,12 @@ npm --cache /tmp/dsh-npm-cache pack dsh-session-titler@0.1.2 --pack-destination 
 tar xzOf /tmp/dsh-session-titler-0.1.2.tgz package/title.js | grep -c routeCandidates   # 期望 ≥ 2
 ```
 
+**复验结果（发布后约 10 分钟，2026-10-02 03:04）**：
+
+- `dist-tags.latest` 已由 `0.1.1` 变为 **`0.1.2`**；版本端点 `GET /dsh-session-titler/0.1.2` 返回 0.1.2 的 packument。
+- `npm --cache /tmp/dsh-npm-cache pack dsh-session-titler@0.1.2` 拉下的 tarball：**13 个文件**、`package/package.json` 的 `version = 0.1.2`、`package/title.js` 里 `routeCandidates` 计数 **3**（新增逻辑确已在正式包里）。
+- 与「坑 2」完全一致：负缓存约 10 分钟自动过期，无需重新发布。
+
 **安装侧提醒**：CDN 刷新前 `/install` 与市场装到的仍是 `0.1.1`。本机 DSH Next 的 `main` profile 已从 `link:` 回滚到 npm `0.1.1`（`~/.dsh/profiles/main/node_modules/dsh-session-titler/title.js` 里 `routeCandidates` 计数为 0，即**当前无修复**）；CDN 刷新后需退出 App 再执行：
 
 ```sh
