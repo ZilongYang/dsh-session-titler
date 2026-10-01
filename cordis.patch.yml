@@ -1,0 +1,8 @@
+# dsh-session-titler bundle patch: one host row over the Web/Desktop profile.
+# The row name resolves from the profile's own node_modules, where
+# `plugin_manager install_bundle` (or `dsh plugin --profile <p> add <path>`)
+# installed this package. The Client half is declared by `dsh.client` in
+# package.json and never needs a row of its own.
+- insert:
+    - id: session-titler
+      name: 'dsh-session-titler'

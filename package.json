@@ -1,0 +1,66 @@
+{
+  "name": "dsh-session-titler",
+  "version": "0.1.0",
+  "type": "module",
+  "description": "DSH 会话标题生成器：把整个会话总结成一条新标题，确认后才写入。Session title generator for DeepSeek Harness: summarize the whole session into one title, then confirm before applying it.",
+  "license": "MIT",
+  "author": "ZilongYang",
+  "icon": "./icon.svg",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ZilongYang/dsh-session-titler.git"
+  },
+  "homepage": "https://github.com/ZilongYang/dsh-session-titler#readme",
+  "bugs": {
+    "url": "https://github.com/ZilongYang/dsh-session-titler/issues"
+  },
+  "keywords": [
+    "deepseek",
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "client-plugin",
+    "cordis",
+    "session",
+    "title",
+    "web"
+  ],
+  "engines": {
+    "node": ">=20.3"
+  },
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
+  },
+  "files": [
+    "index.js",
+    "title.js",
+    "fence.js",
+    "client.js",
+    "icon.svg",
+    "locale/zh.json",
+    "locale/en.json",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    "docs/01-plugin-design-and-implementation.md",
+    "docs/02-open-source-and-marketplace.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-locale",
+        "@deepseek-ai/dsh-client-ui-layout",
+        "@deepseek-ai/dsh-client-ui-conversation",
+        "@deepseek-ai/dsh-client-ui-workspace"
+      ]
+    }
+  }
+}

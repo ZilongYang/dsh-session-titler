@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Session titler (dsh-session-titler)",
+    "description": "Summarize the whole session into one title, then confirm. Entries sit beside the header cost chip and under \"Rename\" in a session row menu."
+  }
+}
