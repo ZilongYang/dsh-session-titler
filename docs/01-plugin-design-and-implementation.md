@@ -131,13 +131,15 @@ export const inject = ['webServer', 'sessions', 'sessionQuery', 'llm']
 ```
 proposeTitle(ctx, sessionId, signal):
   1. 事件源： snap = await ctx.sessionQuery.readSurface(sessionId)   // 抛错 → not-found
-  2. 模型路由：
-       live = ctx.sessions.get(sessionId)
-       route = live?.requestHeader()?.config          // {provider, model}
-            ?? 冷会话时扫描 ctx.sessionQuery.readSession(sessionId).events 里最后一个
-               type === 'request/header' 的 data.header.config
-            ?? ctx.get('agentDefaultModel')?.currentSelection()
-       route 缺失 → llm-error
+  2. 模型路由（**每个候选都先过「当前是否有已注册 adapter」这一关**）：
+       providers = await ctx.llm.listProviders()        // 探测失败 → undefined = 不过滤
+       候选顺序（新 → 旧）：
+         a. live = ctx.sessions.get(sessionId) 时 live.requestHeader()?.config
+         b. 日志里自尾向头每一条 type === 'request/header' 的 data.header.config
+            （活会话用 live.snapshotEvents()，冷会话用 readSession(sessionId).events）
+         c. ctx.get('agentDefaultModel')?.currentSelection()
+       取第一个 provider ∈ providers 的候选；都没有 → no-adapter（消息里带上会话最新记录的路由）
+       返回的 provider/model 与「是否为回退」一起给客户端，弹窗显示「使用模型：…」
   3. transcript：只取 `user/message` 与 `assistant/message`
        - 'user/message'      → ev.data 本身就是 UserMessage，取 ev.data.content
        - 'assistant/message' → ev.data.message.content   （注意两者 data 形状不同！）
@@ -294,7 +296,9 @@ ctx.slots.inject('shell.overlay', () => ctx.slots.register({
 | 空会话 / 无 user·assistant 文本 | 409 `no-content` |
 | 超长会话 | 单条截断 + 32KiB 总预算 + 中间丢弃，`truncated` 标记 |
 | 冷会话（未在 `ctx.sessions`） | 走 `readSurface` + 扫 `readSession` 的 `request/header` 取路由 |
-| 会话从未发过模型请求 | 回退 `agentDefaultModel.currentSelection()`；再拿不到 → 502 |
+| 活会话记录的 provider 已在本 profile 卸载（如 `opencode-go-new`） | 同样过 `listProviders()` 校验，回退到日志里更早的可用路由或 `agentDefaultModel` 默认模型；弹窗显示「使用模型：X（…已回退）」 |
+| 所有候选都没注册 adapter | 502 `no-adapter`（带 `route` 明细），弹窗给中文可操作提示 |
+| 会话从未发过模型请求 | 回退 `agentDefaultModel.currentSelection()`；再拿不到 → 502 `no-adapter` |
 | 模型返回 reasoning 只有思考无正文 | 只取 `text-delta`；空标题 → 502 |
 | 模型返回 Markdown/引号/多行/ANSI | 归一化 |
 | 用户取消/关弹窗 | abort fetch，服务端 `signal` 级联取消 |
@@ -363,3 +367,16 @@ ctx.slots.inject('shell.overlay', () => ctx.slots.register({
 | 未知会话 / GET / 非 loopback Host / 跨站标记 / 坏 JSON / 缺 sessionId / 空会话 | 404 `not-found` / 405 / 403 / 403 / 400 / 400 / 409 `no-content` |
 
 七个反例与三条正例全部符合设计；客户端三个座位在实时 Slot 树中均为 `active: true`；刷新页面后按钮位置与菜单项顺序符合预期。
+
+### A5 同一个校验必须也覆盖「活会话」（0.1.1 的缺陷，2026-10-02 修）
+
+用户实测复现：在 DSH Next 里右键工作区 zWGestures 中标题为「我打算把这个项目开源到 Github」的会话 → 「生成标题」→ 502 `生成失败：no adapter registered for provider "opencode-go-new"`。
+
+根因：A2 的校验**只加在冷会话分支**（`if (live === undefined)`），活会话分支依旧是「`live.requestHeader()?.config` 拿来就用」。那个会话的日志（`~/.dsh/sessions/--Users-zilong-zWork-ai-zWGestures--/session-31a7567b-58a6-4327-8f4d-865b8dad9d8d`）自第一条 `request/header` 起全部是 `opencode-go-new`，最后一条是 `resume` 时的 `opencode-go-new / deepseek-v4.1-flash`；而该 provider 只在 `~/.dsh/profiles/web/cordis.patch.yml` 里定义过，当前运行的 `main` profile（DSH Next 日志 `Host ready: main`）的 `llm-pi-ai` 没有任何 providers 配置，只有内置 pi-ai catalog（有 `opencode-go`，没有 `opencode-go-new`）。该会话当时正开在窗口里 = 活会话，于是走的恰好是没加校验的那条分支；右键目标本身没有错（`client.js` 菜单项用的是本行的 `sessionId`/`displayTitle`）。附带结论：该会话在 main 里**连发消息也会同样报错**——`dsh-agent-loop` 只在 `prepareCall` 阶段吞掉 `NO_ADAPTER`，真正 stream 时仍然失败，所以它是"坏"会话，直到模型被重新选择。
+
+修正：
+1. 活/冷统一：路由候选按「活会话 header fold → 日志每条 `request/header`（自尾向头）→ 默认选择」排列，**每个候选**都过 `listProviders()`；活会话事件取 `live.snapshotEvents()`，冷会话取 `readSession()`，取不到就是空候选。
+2. 探测失败的语义不变：`listProviders()` 抛错 → 不过滤，绝不把本来能成功的调用弄失败。
+3. 回退可见：响应多一个 `fallback: true`，弹窗多一行「使用模型：X（…已回退）」。
+4. 全灭时不再把英文原话丢给用户：`NO_ADAPTER`（无论来自 finish failure 还是抛出的 `LlmError`）映射为 `no-adapter` 代码 + `route` 明细，弹窗给中文可操作提示。
+5. 单测：`test/title.test.js` 共 11 条（活会话回退、活会话保留、活会话沿日志回退、冷会话取最新可用、探测失败不过滤、全灭 → `no-adapter`、`fallback` 标记、流内 `NO_ADAPTER`、空会话 `no-content`），`npm test` = `node --test`。

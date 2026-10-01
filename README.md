@@ -66,11 +66,11 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
       ▲                                                        ├─ ctx.sessionQuery.readSurface(sessionId)
       │                                                        │    （当前「模型表面」，已考虑压缩/替换）
       │                                                        ├─ 组装 transcript（32 KiB 预算，条目级截断）
-      │                                                        ├─ 路由 = session.requestHeader().config
-      │                                                        │    → 冷会话扫日志最后一条 request/header
-      │                                                        │    → 兜底 agentDefaultModel 默认模型
+      │                                                        ├─ 路由候选（新→旧）：活会话 requestHeader().config
+      │                                                        │    → 日志每条 request/header → agentDefaultModel 默认模型
+      │                                                        │    每个候选都要在 llm.listProviders() 里（探测失败则不过滤）
       │                                                        └─ ctx.llm.stream({ …, purpose:'session-title' })
-      │  { ok:true, value:{ title, provider, model, messages, truncated } }
+      │  { ok:true, value:{ title, provider, model, fallback, messages, truncated } }
       ▼
  确认弹窗（可编辑）
       │ 点「确认修改」
@@ -90,7 +90,8 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
 | `package.json` | bundle 补丁声明 + `dsh.client`（web 平台、客户端模块依赖） |
 | `cordis.patch.yml` | 往 profile 插一行 host 插件（`id: session-titler`） |
 | `index.js` | Host 半：注册 `/session-titler/propose`，做请求围栏、体积上限、错误映射 |
-| `title.js` | Host 半：读会话 → 选模型路由 → 组装/裁剪 transcript → 调 `ctx.llm.stream` → 标题归一化 |
+| `title.js` | Host 半：读会话 → 选模型路由（每个候选都校验已注册 adapter）→ 组装/裁剪 transcript → 调 `ctx.llm.stream` → 标题归一化 |
+| `test/title.test.js` | 路由解析与失败映射的单元测试（`npm test` = `node --test`，不进 npm 包） |
 | `fence.js` | Host 半：loopback / 同源请求校验（DNS-rebinding、CSRF 防护，**不是**鉴权） |
 | `client.js` | Client 半：手写模块产物，注册 3 个座位 + 状态 store + 确认弹窗 |
 | `locale/{zh,en}.json` | 插件卡片显示用的 `meta.title` / `meta.description` |
@@ -102,10 +103,12 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
 成功：
 
 ```json
-{ "ok": true, "value": { "title": "…", "provider": "…", "model": "…", "messages": 14, "truncated": false } }
+{ "ok": true, "value": { "title": "…", "provider": "…", "model": "…", "fallback": false, "messages": 14, "truncated": false } }
 ```
 
-失败：`{ "ok": false, "error": { "code": "…", "message": "…" } }`
+`fallback: true` 表示会话自己记录的路由在当前 profile 里没有已注册 adapter，本次是**回退**到日志里更早的可用路由或 `llm-pi-ai`/`agentDefaultModel` 的默认模型生成的；弹窗会显示「使用模型：X（…已回退）」。
+
+失败：`{ "ok": false, "error": { "code": "…", "message": "…", … } }`（`no-adapter` 额外带 `route`）
 
 | code | HTTP | 触发 |
 |---|---|---|
@@ -115,8 +118,9 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
 | `too-large` | 413 | 请求体超限 |
 | `not-found` | 404 | 会话不存在或读不出来 |
 | `no-content` | 409 | 表面里没有 user / assistant 文本 |
-| `timeout` | 504 | 20 s 未回 |
-| `llm-error` | 502 | finish 非 `stop`、模型未产出文本、无可用路由 |
+| `timeout` | 504 | 30 s 未回 |
+| `no-adapter` | 502 | 会话记录的路由 + 默认模型都没有已注册的 adapter（响应带 `route`，弹窗给中文可操作提示） |
+| `llm-error` | 502 | finish 非 `stop`、模型未产出文本 |
 | `internal` | 500 | 其它 |
 
 ## 可调参数
@@ -149,6 +153,7 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 - 本仓库以 `link:` 方式挂进 profile，所以**改代码不用重装**。
 - **Client 半**（`client.js`）：刷新页面生效；插件刚装好时 Host 会推送模块图变更，通常无需刷新就会激活。
 - **Host 半**（`index.js` / `title.js` / `fence.js`）：**必须重启 DSH**。宿主进程内的 ESM 模块缓存不会因装卸载而失效——这是本插件开发中真实踩到的：改完 `title.js` 后路由行为不变，重启后才生效。
+- **单测**：`npm test`（= `node --test`，Node ≥ 20.3）。覆盖路由候选的 adapter 校验与失败映射，不联网、不装依赖。`test/` 不在 npm 包的 `files` 里。
 
 
 ## 已知限制
