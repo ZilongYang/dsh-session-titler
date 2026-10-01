@@ -4,7 +4,50 @@
 
 把**整个会话**总结成一条新标题，**确认后**才写入。DeepSeek Harness 的 Host + Web Client 双半插件。
 
-入口两处（都在现有 Web UI 上，不新增页面）：
+> **Quick start (EN)** — Desktop app: install from the in-app **Plugins** page (the `desktop` profile is app-managed, so `dsh plugin --profile desktop …` refuses). CLI-managed profiles: `dsh plugin --profile <profile> add dsh-session-titler`. Then hit **✦ Generate title** in the session header or **Generate title** in a session row's “…” menu, edit the proposal, and press **Apply** — nothing is written before that.
+
+## 快速开始
+
+### 1. 安装
+
+**桌面版（DeepSeek Harness.app）** —— `desktop` profile 由应用独占，命令行不接管它
+（`dsh plugin --profile desktop …` 会直接报 `profile "desktop" is managed exclusively by the Electron application`）。
+请在**应用内左侧「插件」页**安装，或装好插件市场后在市场里搜 `titler` 一键安装。
+
+**命令行管理的 profile**（`web` / `main` / 自建 profile 等）—— `dsh plugin` 是 pnpm 透传，一条命令即可：
+
+```sh
+# 从 npm 安装（推荐）
+dsh plugin --profile <你的profile> add dsh-session-titler
+
+# 从 GitHub 源码安装（想跟 main 分支时）
+dsh plugin --profile <你的profile> add github:ZilongYang/dsh-session-titler#main
+
+# 本地开发：把本仓库直接挂进去
+dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
+```
+
+### 2. 使用
+
+1. 打开任意一个**已经有内容**的会话；
+2. 点标题栏里的 **✦ 生成标题** —— 它在「创造模式」右边、「费用 ¥0」左边；
+   或点左侧会话行 **「...」菜单 → 生成标题**（在「重命名」下面一行）；
+3. 等 2–4 秒，弹窗给出标题提案，**可以直接改**；
+4. 点 **确认修改** —— 左侧标题立即更新，刷新页面也还在。
+
+> 点「取消 / Esc / 点遮罩」都**不会写任何数据**；空白会话没有可总结的内容，按钮会置灰。
+
+### 3. 卸载
+
+```sh
+dsh plugin --profile <你的profile> remove dsh-session-titler
+```
+
+桌面版在应用内「插件」页停用或卸载。
+
+> 装完没看到按钮？Host 半是进程内模块，**重启一次 dsh/应用**再刷新页面即可（Client 半刷新页面就生效）。
+
+## 入口在哪（两处，都在现有 Web UI 上，不新增页面）
 
 | 入口 | 位置 |
 |---|---|
@@ -92,18 +135,21 @@
 
 标题取模型回答里**第一条可用行**（跳过空行、剥掉解释段落），再按 DSH 的 `normalizeSessionTitle` 归一化：剥 OSC/CSI/ESC 控制序列、C0/C1 控制符、方向性不可见字符 → 空白折叠成单行 → 按 code point 截到 120 字节，绝不切坏字符。`max-tokens` 结束但已产出可用标题行时按成功处理（模型只是话多了，反正要用户确认）。
 
-## 安装 / 卸载
+## 本机开发（改代码时看这节）
+
+安装与卸载见上面的「快速开始」。日常改代码用本地挂载最省事：
 
 ```bash
-# 安装（Host + Web 同 profile）
+# 让 Agent 代为安装（Host + Web 同 profile）
 #   plugin_manager install_bundle target=<本目录绝对路径>
-# 卸载
-#   plugin_manager remove_bundle dsh-session-titler
+# 或者命令行
+dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 ```
 
-- 安装会把本目录以 `link:` 方式挂进 profile，所以**改代码不用重装**。
-- **Client 半**：改完刷新页面即可；新装时 Host 会推送模块图变更，通常无需刷新就能激活。
-- **Host 半**：改完 `index.js` / `title.js` / `fence.js` **必须重启 DSH**，宿主进程内的 ESM 模块缓存不会因装卸载而失效。
+- 本仓库以 `link:` 方式挂进 profile，所以**改代码不用重装**。
+- **Client 半**（`client.js`）：刷新页面生效；插件刚装好时 Host 会推送模块图变更，通常无需刷新就会激活。
+- **Host 半**（`index.js` / `title.js` / `fence.js`）：**必须重启 DSH**。宿主进程内的 ESM 模块缓存不会因装卸载而失效——这是本插件开发中真实踩到的：改完 `title.js` 后路由行为不变，重启后才生效。
+
 
 ## 已知限制
 
