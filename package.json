@@ -28,6 +28,9 @@
   "engines": {
     "node": ">=20.3"
   },
+  "scripts": {
+    "test": "node --test"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",

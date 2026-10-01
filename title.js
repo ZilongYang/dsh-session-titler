@@ -7,6 +7,12 @@
  * session log: the caller shows the proposal to the user, and only the user's
  * confirmation renames the session through the shipped rename path.
  *
+ * The route the session recorded is only used while the current profile still
+ * has an adapter for that provider; otherwise the deployment's default model
+ * answers instead and the proposal reports itself as a fallback. This holds for
+ * live and persisted sessions alike — a live session's folded header is just
+ * the last logged route and can be exactly as stale as a cold log's.
+ *
  * The route resolution, the `purpose: 'session-title'` call, and the title
  * sanitizer mirror `@deepseek-ai/dsh-session-title` and
  * `@deepseek-ai/dsh-session-title-llm`, whose policy this plugin deliberately
@@ -53,12 +59,15 @@ export class TitlerError extends Error {
    * @param {string} code - stable wire code.
    * @param {number} status - HTTP status the route answers with.
    * @param {string} message - human-readable reason.
+   * @param {object} [details] - optional machine-readable facts for the Client,
+   * such as the provider/model route the failure is about.
    */
-  constructor(code, status, message) {
+  constructor(code, status, message, details) {
     super(message)
     this.name = 'TitlerError'
     this.code = code
     this.status = status
+    if (details !== undefined) this.details = details
   }
 }
 
@@ -219,42 +228,127 @@ async function registeredProviders(ctx) {
   }
 }
 
+/** One complete `{provider, model}` route, or `undefined` for a partial config. */
+function routeOf(config) {
+  const provider = config?.provider
+  const model = config?.model
+  if (typeof provider !== 'string' || provider === '') return undefined
+  if (typeof model !== 'string' || model === '') return undefined
+  return { provider, model }
+}
+
 /**
- * Resolve the provider/model pair for one session: the route its last main
- * request was logged with, else the deployment's default selection.
- *
- * A persisted session may name a provider this profile no longer mounts, so a
- * logged route is only taken when that provider still has an adapter; the
- * deployment default is the fallback instead of a certain failure.
+ * Every event of one session: the live log when the session is live, else the
+ * persisted log. A read that cannot produce events yields none instead of
+ * failing the call, because the deployment default still remains.
  */
-export async function resolveRoute(ctx, sessionId) {
-  const live = ctx.sessions.get(sessionId)
-  const configured = live?.requestHeader?.()?.config
-  if (configured?.provider && configured?.model) {
-    return { provider: configured.provider, model: configured.model }
+async function sessionEvents(ctx, sessionId, live) {
+  try {
+    const events = live?.snapshotEvents?.()
+    if (Array.isArray(events)) return events
+  } catch {
+    // A live log that cannot be snapshotted still has the persisted one.
   }
-  if (live === undefined) {
-    const providers = await registeredProviders(ctx)
+  try {
+    const log = await ctx.sessionQuery.readSession(sessionId)
+    return Array.isArray(log?.events) ? log.events : []
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Ordered route candidates of one session, newest first: the route its last
+ * request was logged with (the live header fold, then every `request/header`
+ * event backwards), then the deployment's default selection.
+ *
+ * @returns `{ routes, providers }`; `providers` is `undefined` when the set of
+ * registered adapters could not be determined.
+ */
+async function routeCandidates(ctx, sessionId) {
+  const providers = await registeredProviders(ctx)
+  const routes = []
+  const push = (route) => {
+    if (route !== undefined) routes.push(route)
+  }
+  let live
+  try {
+    live = ctx.sessions?.get?.(sessionId)
+  } catch {
+    live = undefined
+  }
+  if (typeof live?.requestHeader === 'function') {
     try {
-      const log = await ctx.sessionQuery.readSession(sessionId)
-      const events = log?.events ?? []
-      for (let index = events.length - 1; index >= 0; index -= 1) {
-        const event = events[index]
-        if (event?.type !== 'request/header') continue
-        const config = event.data?.header?.config
-        if (!config?.provider || !config?.model) continue
-        if (providers !== undefined && !providers.has(config.provider)) continue
-        return { provider: config.provider, model: config.model }
-      }
+      push(routeOf(live.requestHeader()?.config))
     } catch {
-      // A cold log that cannot be re-read still has the deployment default.
+      // A fold that throws still leaves the persisted header events below.
     }
   }
-  const fallback = ctx.get('agentDefaultModel')?.currentSelection?.()
-  if (fallback?.provider && fallback?.model) {
-    return { provider: fallback.provider, model: fallback.model }
+  const events = await sessionEvents(ctx, sessionId, live)
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index]
+    if (event?.type !== 'request/header') continue
+    push(routeOf(event.data?.header?.config))
   }
-  return undefined
+  try {
+    push(routeOf(ctx.get('agentDefaultModel')?.currentSelection?.()))
+  } catch {
+    // A deployment without that service simply has no fallback selection.
+  }
+  return { routes, providers }
+}
+
+/** Whether the current deployment can actually dispatch one route. */
+function dispatchable(route, providers) {
+  return route !== undefined && (providers === undefined || providers.has(route.provider))
+}
+
+/**
+ * Resolve the provider/model pair for one session: the newest recorded route
+ * that still has a registered adapter, else the deployment's default selection.
+ *
+ * A persisted session may name a provider this profile no longer mounts, and a
+ * live session is no different: its folded header is just the last logged
+ * route, which can be exactly as stale. Every candidate is checked against
+ * `ctx.llm.listProviders()`, so the fallback happens instead of a certain
+ * `no adapter registered for provider` failure.
+ *
+ * @returns `{ provider, model }`, or `undefined` when no candidate is usable.
+ */
+export async function resolveRoute(ctx, sessionId) {
+  const { routes, providers } = await routeCandidates(ctx, sessionId)
+  return routes.find((route) => dispatchable(route, providers))
+}
+
+/** One failure for a route the adapter registry turns out not to hold. */
+function noAdapterOn(route) {
+  return new TitlerError(
+    'no-adapter',
+    502,
+    `provider "${route.provider}" has no registered adapter in this profile`,
+    { route: `${route.provider}/${route.model}` },
+  )
+}
+
+/**
+ * One actionable failure for a session no route candidate can be dispatched
+ * for; the newest recorded route, when there is one, is named in the message.
+ */
+function noAdapterError(routes) {
+  const recorded = routes[0]
+  if (recorded === undefined) {
+    return new TitlerError(
+      'no-adapter',
+      502,
+      'this session has no logged model route and the deployment default model has no registered adapter either',
+    )
+  }
+  return new TitlerError(
+    'no-adapter',
+    502,
+    `the session's newest model route "${recorded.provider}/${recorded.model}" has no registered adapter in this profile, and neither has the deployment default model`,
+    { route: `${recorded.provider}/${recorded.model}` },
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -262,7 +356,7 @@ export async function resolveRoute(ctx, sessionId) {
 // ---------------------------------------------------------------------------
 
 /** Translate a terminal finish reason of the model call into a failure. */
-function finishFailure(finish, timedOut) {
+function finishFailure(finish, route, timedOut) {
   if (finish === undefined) return undefined
   switch (finish.kind) {
     case 'stop':
@@ -272,6 +366,9 @@ function finishFailure(finish, timedOut) {
         ? new TitlerError('timeout', 504, `the model did not answer within ${POLICY.timeoutMs} ms`)
         : new TitlerError('llm-error', 502, finish.failure?.message ?? 'the model call was aborted')
     case 'error':
+      // The adapter boundary reports an unregistered route as a failure chunk,
+      // so the raw registry message never has to reach the dialog.
+      if (finish.failure?.code === 'NO_ADAPTER') return noAdapterOn(route)
       return new TitlerError('llm-error', 502, finish.failure?.message ?? 'the model call failed')
     case 'max-tokens':
       return new TitlerError('llm-error', 502, 'the title output reached maxOutputTokens')
@@ -288,7 +385,7 @@ function finishFailure(finish, timedOut) {
  * @param {object} ctx - host context exposing `sessionQuery`, `sessions`, `llm`.
  * @param {string} sessionId - exact live or persisted session id.
  * @param {AbortSignal | undefined} signal - caller cancellation.
- * @returns {Promise<{title: string, provider: string, model: string, messages: number, truncated: boolean}>}
+ * @returns {Promise<{title: string, provider: string, model: string, fallback: boolean, messages: number, truncated: boolean}>}
  */
 export async function proposeTitle(ctx, sessionId, signal) {
   let snapshot
@@ -304,10 +401,12 @@ export async function proposeTitle(ctx, sessionId, signal) {
   }
   const { turns: bounded, truncated } = shrinkToBudget(turns, POLICY.maxInputBytes)
 
-  const route = await resolveRoute(ctx, sessionId)
-  if (route === undefined) {
-    throw new TitlerError('llm-error', 502, 'no logged model route and no default model selection is available')
-  }
+  const { routes, providers } = await routeCandidates(ctx, sessionId)
+  const route = routes.find((candidate) => dispatchable(candidate, providers))
+  if (route === undefined) throw noAdapterError(routes)
+  // The session's own newest route is the first candidate, so any other pick
+  // is a fallback the dialog can name instead of silently switching models.
+  const fallback = route !== routes[0]
 
   const timeout = AbortSignal.timeout(POLICY.timeoutMs)
   const composed = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
@@ -333,10 +432,11 @@ export async function proposeTitle(ctx, sessionId, signal) {
     if (timeout.aborted) {
       throw new TitlerError('timeout', 504, `the model did not answer within ${POLICY.timeoutMs} ms`)
     }
+    if (error?.code === 'NO_ADAPTER') throw noAdapterOn(route)
     throw new TitlerError('llm-error', 502, messageOf(error))
   }
 
-  const failure = finishFailure(finish, timeout.aborted)
+  const failure = finishFailure(finish, route, timeout.aborted)
   const title = titleFromText(text)
   // A `max-tokens` finish with usable text is accepted: the title line came
   // out, only the model's trailing rambling was cut, and the user still
@@ -349,6 +449,7 @@ export async function proposeTitle(ctx, sessionId, signal) {
     title,
     provider: route.provider,
     model: route.model,
+    fallback,
     messages: bounded.length,
     truncated,
   }

@@ -41,7 +41,11 @@ window.__ModuleLoader__.load({
         regenerate: '重新生成',
         cancel: '取消',
         generating: '正在总结整个会话…',
+        usedModel: '使用模型：{model}',
+        usedModelFallback: '使用模型：{model}（该会话记录的模型在当前 profile 不可用，已回退）',
         noContent: '该会话还没有可总结的内容。',
+        noAdapter: '该会话记录的模型路由「{route}」在当前 profile 没有已注册的适配器，默认模型也不可用。请换一个模型，或为当前 profile 配置该 provider。',
+        noAdapterUnknown: '当前 profile 里没有可用的模型路由（会话没有记录过模型，默认模型也未注册适配器）。请先在模型选择里指定一个可用模型。',
         forbidden: '本机未授权该请求（插件路由需要 loopback 或受信任主机）。',
         unavailable: '插件 Host 侧不可用，请确认已安装并在当前 profile 中启用。',
         renameFailed: '重命名失败。',
@@ -59,7 +63,11 @@ window.__ModuleLoader__.load({
         cancel: 'Cancel',
         regenerate: 'Regenerate',
         generating: 'Summarizing the whole session…',
+        usedModel: 'Model: {model}',
+        usedModelFallback: 'Model: {model} (the model this session recorded is unavailable in this profile, so this is a fallback)',
         noContent: 'This session has nothing to summarize yet.',
+        noAdapter: 'The model route this session recorded ("{route}") has no registered adapter in this profile, and neither has the default model. Pick another model, or configure that provider for this profile.',
+        noAdapterUnknown: 'No usable model route is available in this profile: the session recorded none and the default model has no registered adapter. Pick an available model first.',
         forbidden: 'This request is not authorized (the plugin route needs a loopback or trusted host).',
         unavailable: 'The plugin host half is unavailable; make sure it is installed and enabled in this profile.',
         renameFailed: 'Rename failed.',
@@ -202,11 +210,17 @@ color:var(--dsw-alias-label-primary-foreground)}
       }
 
       /** Turn one failed envelope into the sentence the dialog shows. */
-      const describeFailure = (code, message, status) => {
+      const describeFailure = (error) => {
+        const code = typeof error?.code === 'string' ? error.code : ''
         if (code === 'no-content') return t('noContent')
         if (code === 'forbidden') return t('forbidden')
-        if (status === 404 && code === 'http-404') return t('unavailable')
-        return t('failed', { message })
+        if (code === 'no-adapter') {
+          return typeof error?.route === 'string' && error.route !== ''
+            ? t('noAdapter', { route: error.route })
+            : t('noAdapterUnknown')
+        }
+        if (error?.status === 404 && code === 'http-404') return t('unavailable')
+        return t('failed', { message: typeof error?.message === 'string' ? error.message : '' })
       }
 
       async function generate() {
@@ -226,9 +240,13 @@ color:var(--dsw-alias-label-primary-foreground)}
           const body = await response.json().catch(() => null)
           if (own.signal.aborted || disposed) return
           if (!response.ok || body === null || body.ok !== true) {
-            const code = body && body.error ? body.error.code : `http-${response.status}`
-            const message = body && body.error ? body.error.message : `HTTP ${response.status}`
-            set({ phase: 'error', error: describeFailure(code, message, response.status) })
+            const failure = body && body.error ? body.error : null
+            set({
+              phase: 'error',
+              error: describeFailure(
+                failure ?? { code: `http-${response.status}`, message: `HTTP ${response.status}`, status: response.status },
+              ),
+            })
             return
           }
           set({ phase: 'ready', proposal: body.value.title, meta: body.value, error: null })
@@ -393,6 +411,12 @@ color:var(--dsw-alias-label-primary-foreground)}
 
       const busy = state.phase === 'generating' || state.phase === 'applying'
       const title = state.proposal.trim()
+      // The host answers which route actually produced the proposal, so a
+      // fallback to another model is visible instead of silent.
+      const usedModel =
+        state.meta !== null && typeof state.meta.provider === 'string' && typeof state.meta.model === 'string'
+          ? `${state.meta.provider}/${state.meta.model}`
+          : ''
 
       return h(
         'div',
@@ -430,6 +454,13 @@ color:var(--dsw-alias-label-primary-foreground)}
             ? null
             : h('p', { className: 'st-note' }, `${t('currentTitle')}: ${state.currentTitle}`),
           h('p', { className: 'st-note' }, t('dialogHint')),
+          usedModel === ''
+            ? null
+            : h(
+                'p',
+                { className: 'st-note' },
+                t(state.meta.fallback === true ? 'usedModelFallback' : 'usedModel', { model: usedModel }),
+              ),
           state.phase === 'generating'
             ? h(
                 'div',

@@ -37,9 +37,9 @@ function writeOk(res, value) {
   writeJson(res, 200, { ok: true, value })
 }
 
-/** Write the failure envelope. */
-function writeError(res, status, code, message) {
-  writeJson(res, status, { ok: false, error: { code, message } })
+/** Write the failure envelope, with any machine-readable details of the error. */
+function writeError(res, status, code, message, details) {
+  writeJson(res, status, { ok: false, error: { code, message, ...(details ?? {}) } })
 }
 
 /**
@@ -123,7 +123,7 @@ export function apply(ctx) {
       writeOk(res, value)
     } catch (error) {
       if (res.writableEnded || controller.signal.aborted) return
-      if (error instanceof TitlerError) writeError(res, error.status, error.code, error.message)
+      if (error instanceof TitlerError) writeError(res, error.status, error.code, error.message, error.details)
       else writeError(res, 500, 'internal', messageOf(error))
     }
   }
