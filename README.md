@@ -12,7 +12,7 @@
 
 **桌面版（DeepSeek Harness.app）** —— `desktop` profile 由应用独占，命令行不接管它
 （`dsh plugin --profile desktop …` 会直接报 `profile "desktop" is managed exclusively by the Electron application`）。
-请在**应用内左侧「插件」页**安装，或装好插件市场后在市场里搜 `titler` 一键安装。
+请在**应用内左侧「插件」页**安装；插件市场收录后，也可以直接在里面搜 `titler` 一键装（收录状态见 PR，通常一天内生效）。
 
 **命令行管理的 profile**（`web` / `main` / 自建 profile 等）—— `dsh plugin` 是 pnpm 透传，一条命令即可：
 
