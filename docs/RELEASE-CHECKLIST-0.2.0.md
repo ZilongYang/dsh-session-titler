@@ -54,15 +54,15 @@ ls -la ~/.dsh/profiles/main/node_modules/dsh-session-titler        # 期望：�
 
 ### C1. 单源正常态（`main` profile；`desktop` 同理）
 
-- [ ] 完全退出 DSH NEXT.app（不是关窗口），再启动。
-- [ ] 日志检查（**核心判据**）：
+- [x] 完全退出 DSH NEXT.app（不是关窗口），再启动。（2026-10-16 17:12）
+- [x] 日志检查（**核心判据**）：
 
 ```sh
 grep -nE "session-titler|duplicate exact route|did not activate|client-modules" ~/.dsh/logs/desktop-next.log | tail -30
 ```
 
-  期望：**没有** `webserver: duplicate exact route`、**没有** `did not activate`。
-- [ ] UI：顶栏「✦ 生成标题」→ 弹窗出现、标题可改 → 「确认修改」→ 左侧标题更新，刷新页面后仍在。
+  实测（2026-10-16T09:12:20Z 那次 `run.start` 之后）：`patch: entry "session-titler" not found` **0 次**（说明残留 patch 对上了真实 row → 行已挂载）；`webserver: duplicate exact route` **0 次**；唯一的 `1 entry did not activate` 属于 `@deepseek-ai/dsh-hooks-claude-code`（orca-agent-hooks，既有的缺失包，与本插件无关）。
+- [x] UI：顶栏「✦ 生成标题」→ 弹窗出现、标题可改 → 「确认修改」→ 左侧标题更新，刷新页面后仍在。（由子龙实测确认）
 - [ ] 会话行「...」菜单 → 「生成标题」，同样可用。
 
 ### C2. 路由存活 + live patch reload
@@ -117,6 +117,28 @@ dsh plugin --profile web add link:/Users/zilong/zWork/ai/zl-plugins/dsh-session-
 ### C6. 回填
 
 - [ ] `0.2.1-alpha.3` / `alpha.4`：能实跑后把 `dsh.compatibility.dshReleases` 的值从 `unknown` 改为实测结论，并同步本清单与 README 的版本表。
+
+### C7. 应用内安装本地目录（**正式安装路径**，2026-10-16 待做）
+
+目的：验证**用户真实会走的那条安装路径**（应用插件页 → 本地目录）在修复版上可用，而不是只验证 C0b 手工 link 出来的状态。
+
+- 输入必须是**绝对路径**（`@deepseek-ai/dsh-plugin-manager` 的 `parseInstallSpec()` 会直接拒绝相对路径，理由是「Host 的工作目录对浏览器里输入的人没有意义」）：
+
+```
+/Users/zilong/zWork/ai/zl-plugins/dsh-session-titler
+```
+
+  `link:/Users/zilong/zWork/ai/zl-plugins/dsh-session-titler` 等价可用；插件页自带文案：`支持 npm 包、Git 仓库和本地目录` / `输入插件的包名、GitHub 仓库地址或本地目录路径。`
+
+- 预期行为：核心插件管理器跑 `pnpm add <spec>` → 把包写进 `dsh.profile.bundles` → 做兼容预检（本插件 `peerDependencies` 为空，**不会**被 `evaluatePluginCompatibility()` 拒）。因为插件**已经**被 bundle 层组装，市场不会再 hot-mount（只有 `no loader entry matched` 才会），所以这一次**不该**出现双源。
+- 成功时的额外收益：`pnpm-lock.yaml` 与 `node_modules/.modules.yaml` 被补齐，消掉 C0b 手工安装留下的「未同步、可能被下次 pnpm 操作剪掉」这个脆弱点。
+- 判读：
+
+```sh
+grep -nE "duplicate exact route|did not activate|more than one loader source|multiple active Loader sources" ~/.dsh/logs/desktop-next.log | tail -10
+```
+
+- 若失败：**把界面上的报错原文贴出来**——上一次只留了 execa 的一行摘要，真因没落盘（见 C0b 的桌面版 pnpm shim 疑似根因）。失败后先用 C0b 的备份核对 `main/package.json` 是否被改动。
 
 ## D. 文档
 
