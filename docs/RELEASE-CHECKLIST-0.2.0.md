@@ -155,9 +155,21 @@ Done in 1.2s using pnpm v11.8.0
 - [x] `README.md`：新增「支持的 DSH 版本与兼容声明」小节、双源安装的排查条目、文档索引挂链。
 - [x] `docs/01-plugin-design-and-implementation.md`：附录 A6 事后补记。
 
-## E. 发布动作（**未执行，须单独批准**）
+## E. 发布动作 —— ✅ 2026-10-16 17:28–17:33 已执行
 
-- [ ] `git add` + commit（建议标题：`fix: survive a duplicate mount and declare DSH compatibility (0.2.0)`）。
-- [ ] `npm publish`（注意仓库既有记录：npm 2FA 与 CDN 缓存滞后问题见 `docs/02-open-source-and-marketplace.md`）。
-- [ ] 市场/插件页版本刷新与描述更新（`dsh.compatibility` 变更需等市场 24h TTL 或手动清缓存）。
-- [ ] 在 `desktop` / `web` / `main` 三个 profile 里把 `dsh-session-titler` 升到 `^0.2.0`，并清理重复安装源（市场副本与 bundle 行只留一个）。
+- [x] commit：`8d2982c`（修复）+ `06b027d` / `bb71832` / `447ab7f`（验收记录）。
+- [x] `git push origin main`：`808a348..447ab7f`（GitHub 源码安装 `github:ZilongYang/dsh-session-titler#main` 已可拿到修复）。
+- [x] `npm --cache /tmp/dsh-npm-cache publish`：`+ dsh-session-titler@0.2.0`，exit 0，**未触发 OTP**（现有粒度 token 的 bypass-2FA 仍有效；注意 `docs/02` 记录的 2027-01 起将不再支持，届时要改 `--otp` 或 Trusted Publishing）。
+- [x] 线上产物核验（直接抓 registry tarball，绕过本地缓存）：
+  `version 0.2.0`、`engines.dsh = ">=0.2.0-rc.1 <0.3.0-0"`、`dsh.compatibility.dshReleases` 齐全；`index.js` 含 `mountRoute` ×2、`title.js` 含 `streamTitle` ×2、`client.js` 含 `sessions?.using` 保护 ×1；README 含「支持的 DSH 版本与兼容声明」；13 个文件。
+- [ ] 市场/插件页刷新：`discovery-compatibility-v1.json` 里 `dsh-session-titler` 仍是旧的 `0.1.2 / enginesDsh: null`（`checkedAt` 14:19，24h TTL）→ 需要打开一次插件页或等 TTL；这也是 C4 未做的原因。
+- [ ] 三个 profile 的版本策略（按需）：`desktop` / `main` 目前是本地 `link:`（代码即 0.2.0），`web` 仍是 npm `^0.1.2`；要让 `web` 也用上修复版，在插件页把它更新到 0.2.0 即可。
+
+### 本次发布踩到的两个坑（下次直接照做）
+
+1. **registry 读取路径滞后约 1.5 分钟**：`npm publish` 返回 202（"being processed"）后，`dist-tags.latest` 仍是 `0.1.2`；轮询到 17:32:57（约 1 分 30 秒）才变成 `0.2.0`。发布后不要立刻断言失败，轮询 `https://registry.npmjs.org/dsh-session-titler` 的 `dist-tags.latest`。
+2. **`npm pack dsh-session-titler@0.2.0` 会假性报 `ETARGET/notarget`**：即使 registry 已经能提供 0.2.0（`GET /dsh-session-titler/0.2.0` 正常），npm 仍用本地缓存里过期的 packument。核验线上产物要**直接抓 tarball**：
+   ```sh
+   curl -sSL -o /tmp/p.tgz https://registry.npmjs.org/dsh-session-titler/-/dsh-session-titler-0.2.0.tgz
+   ```
+   （或给 npm 加 `--prefer-online`）。
