@@ -380,3 +380,33 @@ ctx.slots.inject('shell.overlay', () => ctx.slots.register({
 3. 回退可见：响应多一个 `fallback: true`，弹窗多一行「使用模型：X（…已回退）」。
 4. 全灭时不再把英文原话丢给用户：`NO_ADAPTER`（无论来自 finish failure 还是抛出的 `LlmError`）映射为 `no-adapter` 代码 + `route` 明细，弹窗给中文可操作提示。
 5. 单测：`test/title.test.js` 共 11 条（活会话回退、活会话保留、活会话沿日志回退、冷会话取最新可用、探测失败不过滤、全灭 → `no-adapter`、`fallback` 标记、流内 `NO_ADAPTER`、空会话 `no-content`），`npm test` = `node --test`。
+
+### A6 挂载幂等化与 DSH 版本自适应（0.2.0 的缺陷，2026-10-16 修）
+
+**现象（子龙实测）**：插件在 DSH `0.2.0-rc.2` 上正常，升到 `0.2.1-alpha.2~alpha.4` 后启用即“崩溃”，DSH 报 entry 未激活、桌面版进恢复页。
+
+**证据链**（都是本机现成文件，不是推测）：
+
+1. 运行中的桌面版 `DSH NEXT.app` = `2.0.18-next`，内置 DSH `0.2.1-alpha.2`（`app.asar/node_modules/@deepseek-ai/dsh-*/package.json`）；命令行 `dsh` = `0.2.0-rc.2`（`~/Library/pnpm/global/v11/…/node_modules/@deepseek-ai/dsh`）。
+2. `~/.dsh/logs/desktop-next.log` 2026-10-16T06:40:48：
+   `client-modules: package dsh-session-titler resolves from multiple active Loader sources: "…/.dsh-market/" …, "dsh-session-titler" from …/profiles/main/; remove one entry`
+   → `Error: webserver: duplicate exact route "/session-titler/propose"`（栈指向本插件 `index.js` 的 `ctx.webServer.register`）→ `1 entry did not activate` → `config reload at …/cordis.patch.yml failed`。
+3. `~/.dsh/profiles/main/.dsh-market/log.ndjson` 06:40:46：市场先 `hot-mount dsh-session-titler: live`，再把包**重新加回 `dsh.profile.bundles`** 并 force-enable patch 行 → 同一进程里出现**两个 loader 源**。
+4. `~/.dsh/profiles/main/.dsh-market/src/hot.ts` 文件头注释自陈：「its input files live under `<profile>/.dsh-market/` … so a crash can never leave a file that collides with the bundle layer (**inserting an id the bundle layer also inserts is a hard boot failure**)」——即“同 id 双源 = 硬启动失败”是已知边界。
+5. `~/.dsh/recovery/*`（14:18–14:41）的 reason 依次是 `before-plugin-disable` / `before-rollback` / `before-plugin-uninstall`，对象都是 `dsh-session-titler`。
+
+**为什么不是“API 被删”**：把插件用到的每个 API 在 `0.2.0-rc.2`、`0.2.1-alpha.2`（asar 源码）、`0.2.1-alpha.4`（npm tarball 源码）之间逐一 diff——`webServer.register/registerUpgrade`、`sessionQuery.readSurface/readSession`、`sessions.get/requestHeader/snapshotEvents`、`llm.stream/listProviders/resolveCallWithInfo`、客户端 `slots/locale/sessions.using/binding.session.rename`、`window.__ModuleLoader__.load({id,factory})`、`dsh.client` 清单解析——**签名与返回形状均未变**；`@deepseek-ai/cordis` 4.0.5-alpha.1 的 `lib/index.js` 与 4.0.4 **逐字节相同**，loader 1.0.6-alpha.1 只多了一个 HMR 用的 `moduleNamespace` 字段。唯一实质差异是 **DSH 0.2.1-alpha 的 HMR 会 live 重放 profile patch（`config reload … failed` 那条）**，把“重复挂载”从偶发变成必然。
+
+**修正（幂等契约）**：
+
+1. **所有权在进程级共享**：路由句柄放在 `globalThis[Symbol.for('dsh-session-titler/propose-route')]`。必须用全局符号而不是模块变量——双源时是**两个模块实例**（file:// URL 不同），模块作用域互相看不见。
+2. **先释放旧的再注册**：第二个 `apply()` 先调用上一个句柄，再注册自己的，从而“最新挂载持有路由”。
+3. **disposer 必须带所有权判断**：`webServer.register()` 返回的是 `() => table.delete(route.path)`（按 **path** 删，不是按身份），若不判断，旧 fiber 随后卸载会把**继任者**的路由删掉。所以返回的 disposer 在 `globalThis[ROUTE_HANDLE] !== 自己` 时直接返回。
+4. **只容忍自己的重复**：仅当错误匹配 `^webserver: duplicate (exact|prefix) route "…/session-titler/propose"` 时才吞掉（说明有本插件未记录的实例在服务）；其它注册错误照旧上抛，不掩盖真实问题。
+5. **可见性**：每个进程只打一条 `mounted from more than one loader source` 警告，把“清理多余安装源”这件事指出来。
+6. **能力探测而非版本判断**：`title.js` 新增 `streamTitle()`——`llm.stream` 优先，缺失时用 `llm.prepareCall`（0.2.1-alpha 的 `(config, signal)` 形态，再用它返回的 `stream` 绑定的注册关系派发），两者都无 → `unsupported-host` / 501。`proposeTitle()` 的 catch 增加 `TitlerError` 透传，避免新代码被 `llm-error` 兜底改写。`client.js` 对 `sessions.using` / `binding.session.rename` 做存在性判断。
+7. **兼容声明**：`engines.dsh = ">=0.2.0-rc.1 <0.3.0-0"`（市场装前检查 + 展示；已用市场自带 `satisfiesRange` 复核 rc.1/rc.2/alpha.2-4 为真、0.3.0 与 0.1.5 为假），`dsh.compatibility.dshReleases` 逐版本标注。**不加 `peerDependencies`**：DSH 的 `evaluatePluginCompatibility()` 对 peer 不满足是 deny row / 跳过 bundle（静默消失），而 `engines.dsh` 只影响“装前拒绝 + 展示”。
+
+**已知残留**：客户端那一半在双源下由 `dsh-client-modules` 按包名拒绝（`duplicate graph entry` / `multiple active Loader sources`），插件侧无法修复，只能靠清理安装源；README「已知限制」已写明。
+
+**单测**：`test/host.test.js` 6 条（重复挂载不抛且最新 handler 生效、旧 fiber 不误删继任路由、单挂载卸载即摘除、无关注册错误仍上抛、外来同 path 路由不被抢、双挂载后路由仍能返回 200 提案）+ `test/title.test.js` 新增 2 条（只有 `prepareCall` 时仍出标题且入参为 `{provider, model, maxTokens}`；两者都无 → `unsupported-host` / 501）。`npm test` = 19 条全绿。方案与偏差见 `docs/PLAN-2026-10-16.md`，验收勾选见 `docs/RELEASE-CHECKLIST-0.2.0.md`。

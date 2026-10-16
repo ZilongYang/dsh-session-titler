@@ -89,9 +89,10 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
 |---|---|
 | `package.json` | bundle 补丁声明 + `dsh.client`（web 平台、客户端模块依赖） |
 | `cordis.patch.yml` | 往 profile 插一行 host 插件（`id: session-titler`） |
-| `index.js` | Host 半：注册 `/session-titler/propose`，做请求围栏、体积上限、错误映射 |
-| `title.js` | Host 半：读会话 → 选模型路由（每个候选都校验已注册 adapter）→ 组装/裁剪 transcript → 调 `ctx.llm.stream` → 标题归一化 |
-| `test/title.test.js` | 路由解析与失败映射的单元测试（`npm test` = `node --test`，不进 npm 包） |
+| `index.js` | Host 半：注册 `/session-titler/propose`（**幂等挂载**：重复挂载时由最新一次接管路由），做请求围栏、体积上限、错误映射 |
+| `title.js` | Host 半：读会话 → 选模型路由（每个候选都校验已注册 adapter）→ 组装/裁剪 transcript → 经 `streamTitle()` 调模型（优先 `ctx.llm.stream`，兜底 `ctx.llm.prepareCall`）→ 标题归一化 |
+| `test/title.test.js` | 路由解析、失败映射与调用降级的单元测试（`npm test` = `node --test`，不进 npm 包） |
+| `test/host.test.js` | 挂载幂等性单元测试：重复挂载不抛、最新 handler 生效、旧 fiber 不误删新路由（同样不进 npm 包） |
 | `fence.js` | Host 半：loopback / 同源请求校验（DNS-rebinding、CSRF 防护，**不是**鉴权） |
 | `client.js` | Client 半：手写模块产物，注册 3 个座位 + 状态 store + 确认弹窗 |
 | `locale/{zh,en}.json` | 插件卡片显示用的 `meta.title` / `meta.description` |
@@ -121,6 +122,7 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
 | `timeout` | 504 | 30 s 未回 |
 | `no-adapter` | 502 | 会话记录的路由 + 默认模型都没有已注册的 adapter（响应带 `route`，弹窗给中文可操作提示） |
 | `llm-error` | 502 | finish 非 `stop`、模型未产出文本 |
+| `unsupported-host` | 501 | 宿主既没有 `ctx.llm.stream` 也没有 `ctx.llm.prepareCall`（当前所有实测版本两者至少有一个） |
 | `internal` | 500 | 其它 |
 
 ## 可调参数
@@ -153,12 +155,32 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 - 本仓库以 `link:` 方式挂进 profile，所以**改代码不用重装**。
 - **Client 半**（`client.js`）：刷新页面生效；插件刚装好时 Host 会推送模块图变更，通常无需刷新就会激活。
 - **Host 半**（`index.js` / `title.js` / `fence.js`）：**必须重启 DSH**。宿主进程内的 ESM 模块缓存不会因装卸载而失效——这是本插件开发中真实踩到的：改完 `title.js` 后路由行为不变，重启后才生效。
-- **单测**：`npm test`（= `node --test`，Node ≥ 20.3）。覆盖路由候选的 adapter 校验与失败映射，不联网、不装依赖。`test/` 不在 npm 包的 `files` 里。
+- **单测**：`npm test`（= `node --test`，Node ≥ 20.3）。共 19 条：`test/title.test.js` 覆盖路由候选的 adapter 校验、失败映射与调用降级（只有 `prepareCall` / 两者都无）；`test/host.test.js` 覆盖挂载幂等（重复挂载不抛、最新 handler 生效、旧 fiber 不误删新路由、无关注册错误仍上抛、双挂载后路由仍能返回提案）。不联网、不装依赖。`test/` 不在 npm 包的 `files` 里。
 
+
+## 支持的 DSH 版本与兼容声明
+
+| DSH 版本 | 状态 | 依据 |
+|---|---|---|
+| `0.2.0-rc.2` | 已验证可用 | 0.1.x 全程实测；0.2.0 起按本节所述改造 |
+| `0.2.1-alpha.2` | 已验证可用 | 桌面版内置版本；逐包 diff 过插件用到的全部 API（见 `docs/01` 附录 A6），单测覆盖 |
+| `0.2.1-alpha.3` / `alpha.4` | 未实测 | `alpha.4` 已从 npm 取源码 diff（插件可见 API 未变），但未实机跑过，故声明里标 `unknown` |
+| `< 0.2.0-rc.1` / `>= 0.3.0` | 不支持 | 声明范围之外 |
+
+`package.json` 里有两处声明，含义不同：
+
+- **`engines.dsh`**：`">=0.2.0-rc.1 <0.3.0-0"`。插件市场的装前检查读它（顶层 `engines.dsh` 或 `dsh.engines.dsh` 都读，前者优先），落在范围外会**拒绝安装并说明原因**，而不是装完再崩。
+- **`dsh.compatibility`**：同样的范围 + `dshReleases` 逐版本标注（`compatible` / `unknown`），供市场页面与目录展示。
+- 本插件**故意不声明 `peerDependencies`**：DSH 自身的准入闸门（`dsh-app-boot` 的 `evaluatePluginCompatibility`）只读 `@deepseek-ai/dsh*` 的 peer；一旦声明而范围不满足，处理方式是**禁用该行 / 整个 bundle 被跳过**（静默消失，比明确报错更难排查），而 `engines.dsh` 只是“装前拒绝 + 展示”，语义正是我们要的。
+
+市场化里提示「不兼容 / 已停止安装」时：确认你的 DSH 确实在声明范围内；若你明确要冒险试装，用 `dsh plugin allow-version` 或在插件页授予 **exact-version 豁免**（写进 profile 的 `compatibility.json`，只对“该插件的该版本 + 该 DSH 版本”这一对生效）。
+
+**运行时不自报版本，按能力自适应**：`index.js` / `title.js` 不猜版本号，而是探测宿主实际有什么——`llm.stream` 优先、`llm.prepareCall` 兜底、`listProviders` 缺失就不做路由过滤、客户端 `sessions.using` 缺失就给可读文案。所以同一份代码在 0.2.0-rc.2 与 0.2.1-alpha.x 上都能跑，不需要分支版本号。
 
 ## 已知限制
 
 - 只服务 loopback 或 `webRuntime.trustedHosts` 里的主机。经隧道/局域网用非受信 Host 访问时，本路由返回 403（这是有意的 DNS-rebinding 防护）。
+- **同一个 profile 里不要保留两个安装源**：插件市场会把装好的包“热挂载”进当前进程，同时它也可能出现在 profile 的 `dsh.profile.bundles` 里；两边同时生效时，Host 半已能做到幂等（只保留一条路由并打一条警告），但 DSH 的客户端模块表按**包名**去重，会直接拒绝该包（`client-modules: package dsh-session-titler resolves from multiple active Loader sources … remove one entry`），于是两个 UI 入口都不会出现。这一步只能靠清理安装源解决：在插件页/`dsh plugin` 里删掉多余的那一份，或者把 `dsh.profile.bundles` 里的条目去掉。日志里出现 `mounted from more than one loader source` 就是该清理的信号。
 - 弹窗是自写组件（按官方规范不 import `dsh-client-ui-primitives`），样式只引用 `--dsw-alias-*` / `--dsw-radius-*` / `--dsw-elevation-*` token；视觉与宿主的 Modal / 菜单行对齐，但不共享宿主组件的行为升级。
 - 不做自动标题：不会在后台为任何会话生成标题，也不会改动 DSH 自带的标题 provider。
 - 每次点击消耗一次模型调用（输出 ≤ 256 token，输入 ≤ 32 KiB），且**只读**，不写会话。
@@ -167,6 +189,8 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 
 - [`docs/01-plugin-design-and-implementation.md`](docs/01-plugin-design-and-implementation.md) —— 插件设计与实现计划，含落地偏差记录与最终验证数据。
 - [`docs/02-open-source-and-marketplace.md`](docs/02-open-source-and-marketplace.md) —— 开源、npm 发布与社区插件市场上架流程。
+- [`docs/PLAN-2026-10-16.md`](docs/PLAN-2026-10-16.md) —— 0.2.0 方案（修复 0.2.1-alpha.x 重复挂载崩溃 + 版本自适应），批准正文原样存档，文末有事后补记。
+- [`docs/RELEASE-CHECKLIST-0.2.0.md`](docs/RELEASE-CHECKLIST-0.2.0.md) —— 0.2.0 发版/验收打勾清单（含未完成的实机验收项）。
 
 ## License
 

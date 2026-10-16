@@ -262,11 +262,19 @@ color:var(--dsw-alias-label-primary-foreground)}
         const sessionId = state.sessionId
         const title = state.proposal.trim()
         if (sessionId === null || title === '') return
+        // The rename path is the Host's; a Client build that no longer exposes
+        // it must report that instead of throwing out of the click handler.
+        if (typeof sessions?.using !== 'function') {
+          set({ phase: 'ready', error: t('unavailable') })
+          return
+        }
         set({ phase: 'applying', error: null })
         try {
-          const result = await sessions.using(sessionId, { source: 'workspaceOperation' }, (reference) =>
-            reference.binding.session.rename(title),
-          )
+          const result = await sessions.using(sessionId, { source: 'workspaceOperation' }, (reference) => {
+            const rename = reference?.binding?.session?.rename
+            if (typeof rename !== 'function') throw new Error(t('unavailable'))
+            return rename(title)
+          })
           if (disposed) return
           if (!result || result.ok !== true) {
             throw new Error(result && result.error ? result.error.message : t('renameFailed'))

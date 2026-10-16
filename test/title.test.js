@@ -204,3 +204,45 @@ test('a session with nothing to summarize still reports no-content', async () =>
     return true
   })
 })
+
+test('a host without llm.stream is served through llm.prepareCall', async () => {
+  const prepared = []
+  const streamed = []
+  const ctx = context({})
+  delete ctx.llm.stream
+  ctx.llm.prepareCall = async (config, signal) => {
+    prepared.push({ config, signal })
+    return {
+      config: { provider: config.provider, model: config.model, maxTokens: config.maxTokens },
+      stream: async function* (options) {
+        streamed.push(options)
+        yield { type: 'text-delta', text: 'A prepared title' }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+      },
+    }
+  }
+
+  const value = await proposeTitle(ctx, 'session-1')
+
+  assert.equal(value.title, 'A prepared title')
+  assert.deepEqual(prepared[0].config, {
+    provider: 'deepseek-official',
+    model: 'deepseek-flash',
+    maxTokens: 256,
+  })
+  // The prepared controls must reach the bound stream, or the host rejects the
+  // call for drifting away from what it prepared.
+  assert.equal(streamed[0].maxTokens, 256)
+  assert.equal(streamed[0].sessionId, 'session-1')
+})
+
+test('a host with neither entry point reports unsupported-host', async () => {
+  const ctx = context({})
+  delete ctx.llm.stream
+  await assert.rejects(proposeTitle(ctx, 'session-1'), (error) => {
+    assert.ok(error instanceof TitlerError)
+    assert.equal(error.code, 'unsupported-host')
+    assert.equal(error.status, 501)
+    return true
+  })
+})

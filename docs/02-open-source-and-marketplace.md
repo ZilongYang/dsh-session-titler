@@ -82,6 +82,8 @@ private/redaction-notes.md                                 ← 脱敏对照表 +
 
 **明确不加**：`engines.dsh` / `dsh.compatibility`（只在 DSH `0.2.0-rc.2` 上实测过，不写跨版本兼容承诺）、`dshhub` 清单块、`peerDependencies`。
 
+> **0.2.0 更新（2026-10-16）**：上一条已作废——0.2.0 起**加上** `engines.dsh` 与 `dsh.compatibility`（`0.2.0-rc.2` 为历史实机实测，`0.2.1-alpha.2`/`alpha.4` 为逐包源码 diff + 单测覆盖，实机验收项见发版清单），`peerDependencies` 仍然**明确不加**。原因与语义见 `docs/01-plugin-design-and-implementation.md` 附录 A6 与 `docs/PLAN-2026-10-16.md`。
+
 ### A2 新增 `LICENSE`（MIT / `Copyright (c) 2026 ZilongYang`）
 
 ### A3 新增 `.gitignore`

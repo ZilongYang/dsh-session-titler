@@ -3,7 +3,8 @@
  *
  * Reads one session's current model surface through `ctx.sessionQuery`, frames
  * it as data, asks the session's own model route for a one-line title through
- * `ctx.llm.stream`, and normalizes the answer. Nothing here writes to the
+ * the host's streaming entry point (`ctx.llm.stream`, with `ctx.llm.prepareCall`
+ * as the fallback), and normalizes the answer. Nothing here writes to the
  * session log: the caller shows the proposal to the user, and only the user's
  * confirmation renames the session through the shipped rename path.
  *
@@ -352,6 +353,54 @@ function noAdapterError(routes) {
 }
 
 // ---------------------------------------------------------------------------
+// Model call entry point
+// ---------------------------------------------------------------------------
+
+/**
+ * Request one title from whichever streaming entry point this host exposes.
+ *
+ * Every DSH release this plugin has been checked against (`0.2.0-rc.2`,
+ * `0.2.1-alpha.2`, `0.2.1-alpha.4`) exposes `llm.stream(options)`, so that is
+ * the path taken in practice. The prepared-call API is the fallback for a host
+ * that stopped offering `stream`: `llm.prepareCall` keeps one adapter
+ * registration across capability resolution, header logging, and dispatch, so
+ * a fallback call is bound the same way the shipped titling provider binds it.
+ *
+ * A host offering neither is reported as an actionable failure instead of a
+ * raw `undefined is not a function`.
+ *
+ * @param {object} ctx - host context exposing `llm`.
+ * @param {object} options - the complete stream request.
+ * @returns {AsyncIterable<object>} the chunk stream.
+ * @throws {TitlerError} `unsupported-host` when neither entry point exists.
+ */
+export function streamTitle(ctx, options) {
+  const llm = ctx.llm
+  if (typeof llm?.stream === 'function') return llm.stream(options)
+  if (typeof llm?.prepareCall === 'function') return preparedTitleStream(llm, options)
+  throw new TitlerError(
+    'unsupported-host',
+    501,
+    'this DSH build exposes neither llm.stream nor llm.prepareCall, so a title cannot be requested',
+  )
+}
+
+/**
+ * Fallback for a host that only exposes the prepared-call API.
+ *
+ * The returned handle owns the adapter registration, so the prepared `config`
+ * is spread into the stream options: the host rejects a call whose controls
+ * drifted from the prepared ones.
+ */
+async function* preparedTitleStream(llm, options) {
+  const call = await llm.prepareCall(
+    { provider: options.provider, model: options.model, maxTokens: options.maxTokens },
+    options.signal,
+  )
+  for await (const chunk of call.stream({ ...options, ...call.config })) yield chunk
+}
+
+// ---------------------------------------------------------------------------
 // The operation
 // ---------------------------------------------------------------------------
 
@@ -414,7 +463,7 @@ export async function proposeTitle(ctx, sessionId, signal) {
   let text = ''
   let finish
   try {
-    for await (const chunk of ctx.llm.stream({
+    for await (const chunk of streamTitle(ctx, {
       provider: route.provider,
       model: route.model,
       system: SYSTEM_PROMPT,
@@ -432,6 +481,9 @@ export async function proposeTitle(ctx, sessionId, signal) {
     if (timeout.aborted) {
       throw new TitlerError('timeout', 504, `the model did not answer within ${POLICY.timeoutMs} ms`)
     }
+    // A failure this plugin already classified (an unsupported host, say)
+    // keeps its own code instead of being flattened into a generic one.
+    if (error instanceof TitlerError) throw error
     if (error?.code === 'NO_ADAPTER') throw noAdapterOn(route)
     throw new TitlerError('llm-error', 502, messageOf(error))
   }
