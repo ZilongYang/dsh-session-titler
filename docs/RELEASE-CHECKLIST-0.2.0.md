@@ -23,21 +23,36 @@
 - [x] 声明生效复核（用市场自带的 `manifestFacts` + `deriveHostCompatibility` 跑本仓库新旧 `package.json`）：
   `0.1.2` 在 `0.2.1-alpha.2` 上 → `unknown / undeclared`；`0.2.0` → `compatible / manifest`（`requirement = ">=0.2.0-rc.1 <0.3.0-0"`），`0.3.0` → `incompatible`。即“市场说未声明”这个问题在**清单层面**已修好。
 
-## C. 实机验收（**未做，需要重启 DSH，须子龙批准**）
+## C. 实机验收（**进行中**：2026-10-16 已手工装入 `main`，等待重启验证）
 
 > ⚠️ 重启 DSH NEXT.app 会**结束当前会话**（本插件的开发会话就跑在里面）。下面是逐步步骤，可照着做。
-> 全程可回滚：行为回滚只需删掉 `index.js` 的 `mountRoute` 与 `title.js` 的 `streamTitle`；声明回滚删掉 `engines.dsh` 与 `dsh.compatibility`。
+> 全程可回滚：行为回滚只需删掉 `index.js` 的 `mountRoute` 与 `title.js` 的 `streamTitle`；声明回滚删掉 `engines.dsh` 与 `dsh.compatibility`；本次安装回滚见 C0b 的备份路径。
 
 ### C0. 记录现场（重启前）
 
 ```sh
-cp ~/.dsh/profiles/desktop/package.json /tmp/desktop-profile-before.json
-ls -la ~/.dsh/profiles/desktop/node_modules/dsh-session-titler     # 期望是指向本仓库的 link
-grep -n "session-titler" ~/.dsh/profiles/desktop/package.json      # 期望在 dsh.profile.bundles 里
-grep -c "session-titler" ~/.dsh/profiles/main/package.json         # main 里当前应为已卸载状态
+cat ~/.dsh/desktop-next.json                                       # 应用当前 profile（本次为 main）
+grep -n "session-titler" ~/.dsh/profiles/main/package.json         # 期望：dependencies 有 link:、bundles 里有名字
+ls -la ~/.dsh/profiles/main/node_modules/dsh-session-titler        # 期望：指向本仓库的软链
 ```
 
-### C1. 单源正常态（`desktop` profile）
+### C0b. 本次验收前的安装方式（2026-10-16 手工 link，绕过 pnpm）
+
+`dsh plugin --profile main add link:/Users/zilong/zWork/ai/zl-plugins/dsh-session-titler` 实测**失败**，且真实报错没有落盘：`~/.dsh/profiles/main/.plugin-manager/logs/operation-RvSpxS/pnpm.log`（16:57:55）里只有 execa 的一行摘要 `Command failed with exit code 1: pnpm add 'link:…'`。dshmarket 自己的源码注释确认了这一点：pnpm 输出现在直通界面，日志文件只留摘要。包本身没有问题——在临时目录里用 `pnpm add link:<本仓库>`（pnpm 12.3.4）直接成功。
+
+可疑根因（属于**桌面版环境缺陷**，待单独修，与本插件无关）：桌面版生成的 pnpm shim `~/.local/bin/pnpm` 里 `PNPM_BIN` 指向 `~/Library/Application Support/io.github.hairyf.deepseek-harness-desktop/dependencies/pnpm/bin/pnpm.cjs`，而该目录**已不存在**（应用数据目录已迁到 `~/.dsh`；真正的自带 pnpm 11.7.0 在 `~/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/pnpm`）。shim 的兜底是顺 PATH 找用户 pnpm；在 `@deepseek-ai/dsh-plugin-manager` 的 service 路径（`scrubbedParentEnv()`）下 PATH 可能被裁剪到找不到 pnpm，于是打印 `[pnpm] pnpm not found. Please run DeepSeek Harness Desktop to install it first.` 并 exit 1——与「一行摘要、无其它输出」的表现一致。
+
+因此改为**不经过 pnpm** 的手工安装（落地状态与一次成功的 `link:` 安装等价）：
+
+- `~/.dsh/profiles/main/package.json`：`dependencies` 增加 `"dsh-session-titler": "link:/Users/zilong/zWork/ai/zl-plugins/dsh-session-titler"`；`dsh.profile.bundles` 增加 `"dsh-session-titler"`；删除残留的 `desktopNextDeselectedBundles`（数组清空后按应用自己的写法删掉整个键）。
+- `~/.dsh/profiles/main/node_modules/dsh-session-titler` → 软链 `../../../../zWork/ai/zl-plugins/dsh-session-titler`（与 `desktop` profile 的写法一致）。
+- 解析校验：`version: 0.2.0`、`engines.dsh: >=0.2.0-rc.1 <0.3.0-0`、`index.js` 含 `mountRoute`。
+- 备份与回滚：`~/.dsh/profiles/main/package.json.bak-titler-20261016-170952`；回滚 = 还原该文件 + 删除软链。
+- **已知残留**：`pnpm-lock.yaml` 与 `node_modules/.modules.yaml` 未同步，下一次真正的 pnpm 操作可能把这个软链剪掉。验证通过后应补一次正确的 pnpm 安装（或接受这一脆弱点，被剪掉后重做）。
+
+另一条会干扰后续安装的事实（与崩溃无关）：`dsh plugin --profile <p> add` 只是 pnpm 透传，**不会**把包写进 `dsh.profile.bundles`；而 `readProfilePlugins()` 用 `enabled: bundles.includes(name)` 决定是否组装，所以单独一条 `dsh plugin add` 即使成功也不会加载。
+
+### C1. 单源正常态（`main` profile；`desktop` 同理）
 
 - [ ] 完全退出 DSH NEXT.app（不是关窗口），再启动。
 - [ ] 日志检查（**核心判据**）：
@@ -53,6 +68,7 @@ grep -nE "session-titler|duplicate exact route|did not activate|client-modules" 
 ### C2. 路由存活 + live patch reload
 
 ```sh
+PROFILE=main   # 若改用 desktop，这里同步改
 PORT=$(grep -o "127\.0\.0\.1:[0-9]\{4,5\}" ~/.dsh/logs/desktop-next.log | tail -1 | cut -d: -f2)
 SID=$(ls -t ~/.dsh/sessions/--Users-zilong-zWork-ai-zl-plugins-dsh-session-titler--/ | head -1)
 echo "$PORT / $SID"
@@ -61,7 +77,7 @@ curl -sS -X POST -H "Host: 127.0.0.1:$PORT" -H 'content-type: application/json' 
 ```
 
 - [ ] 返回 `{"ok":true,...}`。返回 403 说明 `Host` 头没对齐；404 说明会话 id 不对。
-- [ ] 触发一次 profile patch 重载（`touch ~/.dsh/profiles/desktop/cordis.patch.yml`；若 `touch` 不触发，就在插件页把任意插件开关一次），等 3–5 秒，**再 curl 一次**，仍应 200 且**日志里没有** `duplicate exact route`。
+- [ ] 触发一次 profile patch 重载（`touch ~/.dsh/profiles/$PROFILE/cordis.patch.yml`；若 `touch` 不触发，就在插件页把任意插件开关一次），等 3–5 秒，**再 curl 一次**，仍应 200 且**日志里没有** `duplicate exact route`。
 
 ### C3. 双源复现（复刻 06:40 那条崩溃路径）
 
@@ -79,20 +95,24 @@ grep -nE "duplicate exact route|did not activate|more than one loader source|mul
 ### C4. 兼容结论刷新
 
 ```sh
-rm -f ~/.dsh/profiles/desktop/.dsh-market/discovery-compatibility-v1.json   # 仅市场缓存，会重新抓取
-node -e 'const j=require(process.env.HOME+"/.dsh/profiles/desktop/.dsh-market/discovery-compatibility-v1.json");console.log(j.entries["dsh-session-titler"])'
+PROFILE=main
+rm -f ~/.dsh/profiles/$PROFILE/.dsh-market/discovery-compatibility-v1.json   # 仅市场缓存，会重新抓取
+node -e 'const j=require(process.env.HOME+"/.dsh/profiles/main/.dsh-market/discovery-compatibility-v1.json");console.log(j.entries["dsh-session-titler"])'
 ```
 
 - [ ] 插件页显示为**确定兼容**（不再是“未声明”）。
 - [ ] 上面的 node 输出里 `enginesDsh` 为 `">=0.2.0-rc.1 <0.3.0-0"`。
+- [ ] 注意：`main` 的市场缓存文件可能要等一次插件页打开后才会重新生成；本次手工安装未经 pnpm，缓存里的 `version` 可能仍是旧值，以插件页显示为准。
 
 ### C5. 0.2.0-rc.2 回归（可选，涉及 profile 变更）
 
-- [ ] 在 CLI 管理的 profile（如 `web`）里升级到 0.2.0，跑一次生成标题，确认不退化：
+- [ ] 在 CLI 管理的 profile（如 `web`）里换成 0.2.0，跑一次生成标题，确认不退化。
 
 ```sh
 dsh plugin --profile web add link:/Users/zilong/zWork/ai/zl-plugins/dsh-session-titler
 ```
+
+  两个前提（见 C0b）：① 这条命令只是 pnpm 透传，**不会**把包加进 `dsh.profile.bundles`，需要再加一行（或在插件页操作）；② 桌面版 shim 那条路可能直接 exit 1，必要时用 `node ~/.dsh/dsh-runtimes/dsh-primary-runtime/dependencies/pnpm/bin/pnpm.cjs add link:<仓库> --dir ~/.dsh/profiles/web --no-frozen-lockfile`。
 
 ### C6. 回填
 
