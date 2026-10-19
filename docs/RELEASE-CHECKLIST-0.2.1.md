@@ -32,10 +32,11 @@
 ## 4. 发布
 
 - [x] `npm --cache /tmp/dsh-npm-cache publish`（沙箱下默认 `~/.npm` 会被拒；2FA 见 `docs/02`「坑 1」）→ `+ dsh-session-titler@0.2.1`，PUT 202。
-- [ ] 判定以**版本端点**为准（`curl -s https://registry.npmjs.org/dsh-session-titler/0.2.1`），packument 有约 10 分钟负缓存（「坑 2」）。
+- [x] 判定以**版本端点**为准（`curl -s https://registry.npmjs.org/dsh-session-titler/0.2.1`）→ 发布后约 4 分钟转 200；`npm view` 的 `dist-tags.latest` = `0.2.1`（packument 有约 10 分钟负缓存，见「坑 2」）。
 - [x] `git push origin main`（6e606ce..58b4a2c）。
-- [ ] 社区市场**无需**重新提 PR（`awesome-dsh-plugin` 列表按仓库自动收录，条目已在 PR #6327）。
-- [ ] 本机 `desktop` / `main` 两个 profile 的拷贝版已手动更新到 0.2.1 的 `client.js`；正式走市场升级后可覆盖。
+- [x] 社区市场**无需**重新提 PR（`awesome-dsh-plugin` 列表按仓库自动收录，条目已在 PR #6327）。
+- [x] 本机 `desktop` / `main` 两个 profile 的拷贝版已手动更新到 0.2.1 的 `client.js`；正式走市场升级后可覆盖。
+- [x] 成品审计：从 registry 直链拉 `dsh-session-titler-0.2.1.tgz` → **13 个文件**，`package/client.js` 内是 `return session.rename(title)`（旧写法 `const rename = reference` 已不存在）。
 
 ## 5. 未覆盖 / 已知残留
 

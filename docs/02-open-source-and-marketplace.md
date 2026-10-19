@@ -386,4 +386,10 @@ npm --cache /tmp/dsh-npm-cache publish
 - 读接口滞后与「坑 2」一致：发布后立即 `npm view` 仍是 `0.2.0`，版本端点 `GET /dsh-session-titler/0.2.1` 仍返回 `version not found: 0.2.1`，`npm pack @0.2.1` 报 `notarget`；**判定以 PUT 状态码为准**，负缓存约 10 分钟过期。
 - 社区市场**不需要**重新提 PR：`awesome-dsh-plugin` 按仓库自动收录（条目已在 PR #6327）。
 
+**复验（约 4 分钟后，2026-10-19 22:41）**：
+
+- 版本端点 `GET /dsh-session-titler/0.2.1` → **200**（packument 内容已是 0.2.1）；`npm view` 的 `dist-tags.latest` 由 `0.2.0` 变为 **`0.2.1`**。
+- 从 registry 直链拉 tarball：**13 个文件**，`package/client.js` 第 283 行为 `return session.rename(title)`，旧写法 `const rename = reference` 已不存在 —— 修复确已在正式包里。
+- `npm pack @0.2.1` 一度仍报 `notarget`（本地 packument 缓存滞后），改用版本端点里的 `dist.tarball` 直链下载即可，属同一负缓存现象。
+
 **安装侧**：本机 `desktop` / `main` 两个 profile 是**拷贝安装**（非 `link:`），发版前已手动把两者的 `client.js` 覆盖为 0.2.1 版本以便验证；正式升级仍走市场页或 `dsh plugin --profile <p> add dsh-session-titler@0.2.1`。CDN 刷新前市场装到的仍是 0.2.0。
