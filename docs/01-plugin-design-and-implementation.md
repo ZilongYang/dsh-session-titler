@@ -443,3 +443,37 @@ return session.rename(title)
 **部署时踩到的坑（本轮新增）**：本机三个 profile 各有一份**拷贝**（不是 `link:`）：`main` 0.2.0、`desktop` 0.2.0、`web` 0.1.2。桌面 App 实际跑的是 **`desktop`** profile（判据：该 profile 装了本会话可见的 `dsh-zotero` / `dsh-zl-rental`，而 `main` 没有 zotero）。第一次只覆盖了 `main`，现象完全不变；覆盖 `desktop` 后才生效。→ **改完代码要按「运行中的那个 profile」部署，别按记忆里的 profile。**
 
 **版本自适应结论（0.2.1-rc.2 vs 0.2.1-alpha.4 逐包 diff，GitHub tag 源码）**：`packages/api/session-controller`、`packages/api/gateway`、`packages/api/remotes` 除 `package.json` 版本号外**无代码差异**；本插件用到的客户端 API 形状不变。新增的官方 `dsh-session-title` / `dsh-experimental-session-titles-bundle` 是**标题 provider**，与本插件「不注册 provider、只在用户点击时显式生成」的路线不冲突。
+
+### A8 生成失败的 Host 侧原因：模型已删、端点强制推理（2026-10-19，开发分支）
+
+两个报错都落在 `title.js` 的调用链上：路由校验漏了 model 维度（A8.1），调用参数让端点整单拒收（A8.2）。写回失败（`reading 'remote'`）见上文 A7，已随 0.2.1 发布。
+
+#### A8.1 已删模型：`pi-ai provider "openrouter" has no configured model "stealth/space-bunny-alpha"`
+
+**现象**：在换过模型、或模型已被删掉的会话里点「生成标题」→ `生成失败：pi-ai provider "openrouter" has no configured model "stealth/space-bunny-alpha"`。
+
+**根因**：A2/A5 的路由校验只问「这个 provider 的 adapter 还在不在」，不问「这个 model id 还在不在」。`stealth/space-bunny-alpha` 已从 profile 删掉，但 `openrouter` 还在，于是旧校验放行、候选被派发下去，pi-ai 的 `modelOf()` 抛 `UNKNOWN_MODEL`（`dsh-llm-pi-ai/lib/index.js:1875`）。
+
+**修正**：
+
+1. 每个候选再过一次 `ctx.llm.resolveModelInfo(provider, model)`——它先查 adapter 注册（`NO_ADAPTER`），再让 adapter 解析模型 id（pi-ai 抛 `UNKNOWN_MODEL`）；
+2. 只有 `UNKNOWN_MODEL` / `NO_ADAPTER` 算「路由已失效」并继续回退；其它错误（例如 `MISSING_CREDENTIAL`）不当作失效——那不是路由的错，让真正的调用去报；
+3. 全灭时按第一个被拒候选的原因分成 `no-model`（provider 在、模型没了）与 `no-adapter`，两者都带 `route`；客户端新增 `noModel` 文案，别把英文原话丢给用户；
+4. 宿主没有 `resolveModelInfo` 时跳过这层过滤（能力探测优先，绝不把本来能成功的调用弄失败）。
+
+#### A8.2 强制推理端点：`400 Reasoning is mandatory for this endpoint and cannot be disabled`
+
+**现象**：用 openrouter 的 `openai/gpt-oss-20b` 的会话点「生成标题」→ `生成失败：400: {"message":"Reasoning is mandatory for this endpoint and cannot be disabled.","code":400,"metadata":{"provider_name":null}}`。
+
+**根因**：该 profile 把这个模型声明成 `reasoningEfforts: { off: null, high, max }`——`off: null` 的含义是「这个端点关不掉推理」，pi-ai 的 `getSupportedThinkingLevels()` 也会把值为 `null` 的档位从可用集合里剔除。本插件此前只传 `provider` / `model` / `maxTokens`，不传 `reasoningEffort`；pi-ai 在 openrouter 格式下遇到「没指定档位」会显式发 `reasoning: { effort: thinkingLevelMap.off ?? 'none' }`，即 `{ effort: 'none' }`，被端点拒绝。
+
+**修正**：
+
+1. `titleReasoningEffort(info)`：没有 `info.reasoning` → 不传（宿主自己决定）；`efforts` 里有 `off` → 不传（保持最省路径）；否则取 `defaultEffort`，没有就取它给出的第一个档位；
+2. 这种情况下把输出预算放宽到 `POLICY.maxReasoningOutputTokens = 2048`：思考会吃掉 256 的绝大部分，标题还没开始写就撞 `max-tokens`；
+3. `resolveModelInfo` 一次探测同时服务这两件事（可用性 + 推理能力），不多花一次往返。
+
+#### A8.3 验证
+
+- 单测从 19 条增到 **25 条**（`test/title.test.js` 新增 6 条：模型已删除时回退、全灭报 `no-model`（含 `status` 与 `details.route`）、`MISSING_CREDENTIAL` 不触发过滤、强制推理端点带档位且预算 2048、`defaultEffort` 优先于最省档位、`efforts` 含 `off` 时不传 `reasoningEffort`）。`npm test` = `node --test`，无网络、无依赖。
+- README 同步：数据流图的候选校验、错误码表新增 `no-model`、POLICY 表新增 `maxReasoningOutputTokens`、失败契约的 `route` 字段、已知限制里的输出预算。
