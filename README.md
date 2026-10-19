@@ -72,7 +72,7 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
       │                                                        │    → 日志每条 request/header → agentDefaultModel 默认模型
       │                                                        │    每个候选都要过 listProviders() 与 resolveModelInfo()
       │                                                        │    （探测不可用就不过滤，绝不把能成功的调用弄坏）
-      │                                                        │    强制推理的端点：显式给最省档位 + 放宽输出预算
+      │                                                        │    强制推理的端点：被拒一次后带档位重试 + 放宽输出预算
       │                                                        └─ ctx.llm.stream({ …, purpose:'session-title' })
       │  { ok:true, value:{ title, provider, model, fallback, messages, truncated } }
       ▼
@@ -138,7 +138,7 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
 |---|---|---|
 | `maxInputBytes` | 32768 | 送进模型的 transcript 字节上限 |
 | `maxOutputTokens` | 256 | 标题输出的 token 上限（DSH 自带的首条消息 provider 用 64；整段会话会让推理模型把 64 全花在思考上，故放宽） |
-| `maxReasoningOutputTokens` | 2048 | 端点**不允许关闭推理**时的输出上限：思考会吃掉一部分预算，256 会让标题在 `max-tokens` 处被截掉 |
+| `maxReasoningOutputTokens` | 2048 | 端点**不允许关闭推理**时的输出上限：思考会吃掉一部分预算，256 会让标题在 `max-tokens` 处被截掉（只在这类端点被识别出来后才用） |
 | `timeoutMs` | 30000 | 单次标题调用的墙钟预算 |
 | `maxTitleBytes` | 120 | 接受标题的 UTF-8 字节上限 |
 | `userCharsPerMessage` / `assistantCharsPerMessage` | 2000 / 3000 | 单条消息裁剪上限 |
@@ -161,7 +161,7 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 - 本仓库以 `link:` 方式挂进 profile，所以**改代码不用重装**。
 - **Client 半**（`client.js`）：刷新页面生效；插件刚装好时 Host 会推送模块图变更，通常无需刷新就会激活。
 - **Host 半**（`index.js` / `title.js` / `fence.js`）：**必须重启 DSH**。宿主进程内的 ESM 模块缓存不会因装卸载而失效——这是本插件开发中真实踩到的：改完 `title.js` 后路由行为不变，重启后才生效。
-- **单测**：`npm test`（= `node --test`，Node ≥ 20.3）。共 25 条：`test/title.test.js` 覆盖路由候选的 adapter + 模型校验（模型已删除时回退、全灭报 `no-model`、非路由性探测失败不过滤）、强制推理端点的档位与预算、失败映射与调用降级（只有 `prepareCall` / 两者都无）；`test/host.test.js` 覆盖挂载幂等（重复挂载不抛、最新 handler 生效、旧 fiber 不误删新路由、无关注册错误仍上抛、双挂载后路由仍能返回提案）。不联网、不装依赖。`test/` 不在 npm 包的 `files` 里。
+- **单测**：`npm test`（= `node --test`，Node ≥ 20.3）。共 30 条：`test/title.test.js` 覆盖路由候选的 adapter + 模型校验（模型已删除时回退、全灭报 `no-model`、非路由性探测失败不过滤）、强制推理端点的档位与预算（含「看着能关推理、实际被端点拒绝」的一次重试；只剩 `off` 时不重试、二次仍拒不再重试、无关失败不重试）、失败映射与调用降级（只有 `prepareCall` / 两者都无）；`test/host.test.js` 覆盖挂载幂等（重复挂载不抛、最新 handler 生效、旧 fiber 不误删新路由、无关注册错误仍上抛、双挂载后路由仍能返回提案）。不联网、不装依赖。`test/` 不在 npm 包的 `files` 里。
 
 
 ## 支持的 DSH 版本与兼容声明
@@ -192,7 +192,7 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 - **同一个 profile 里不要保留两个安装源**：插件市场会把装好的包“热挂载”进当前进程，同时它也可能出现在 profile 的 `dsh.profile.bundles` 里；两边同时生效时，Host 半已能做到幂等（只保留一条路由并打一条警告），但 DSH 的客户端模块表按**包名**去重，会直接拒绝该包（`client-modules: package dsh-session-titler resolves from multiple active Loader sources … remove one entry`），于是两个 UI 入口都不会出现。这一步只能靠清理安装源解决：在插件页/`dsh plugin` 里删掉多余的那一份，或者把 `dsh.profile.bundles` 里的条目去掉。日志里出现 `mounted from more than one loader source` 就是该清理的信号。
 - 弹窗是自写组件（按官方规范不 import `dsh-client-ui-primitives`），样式只引用 `--dsw-alias-*` / `--dsw-radius-*` / `--dsw-elevation-*` token；视觉与宿主的 Modal / 菜单行对齐，但不共享宿主组件的行为升级。
 - 不做自动标题：不会在后台为任何会话生成标题，也不会改动 DSH 自带的标题 provider。
-- 每次点击消耗一次模型调用（输出 ≤ 256 token，强制推理的端点 ≤ 2048，输入 ≤ 32 KiB），且**只读**，不写会话。
+- 每次点击消耗一次模型调用（输出 ≤ 256 token，被判定为强制推理的端点 ≤ 2048，输入 ≤ 32 KiB），且**只读**，不写会话。宿主无法提前区分「推理可关」与「强制推理」的端点（两者在模型元数据里同形），所以后者会先被拒一次（立即 400），随后带档位重试成功——净消耗仍是 1 次生成 + 1 次被拒的空往返。
 
 ## 设计与发布文档
 
