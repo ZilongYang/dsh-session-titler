@@ -15,10 +15,13 @@
  * and persisted sessions alike — a live session's folded header is just the
  * last logged route and can be exactly as stale as a cold log's.
  *
- * A route that cannot turn reasoning off (an endpoint whose reasoning map has
- * no `off` entry) is still usable, but the call has to name an effort: the
- * adapter would otherwise send an explicit "off" payload such an endpoint
- * rejects with `400 Reasoning is mandatory`.
+ * A route that cannot turn reasoning off is still usable, but the call has to
+ * name an effort: the adapter would otherwise send an explicit "off" payload
+ * such an endpoint rejects with `400 Reasoning is mandatory`. The host cannot
+ * always tell this route apart beforehand — a profile declaring
+ * `reasoningEfforts: { off: null }` makes the adapter omit its `off` mapping,
+ * which reads back as a supported level `off` — so the plugin notices the
+ * rejection itself and retries once with a named effort.
  *
  * The route resolution, the `purpose: 'session-title'` call, and the title
  * sanitizer mirror `@deepseek-ai/dsh-session-title` and
@@ -438,6 +441,31 @@ export function titleReasoningEffort(info) {
   return reasoning.defaultEffort ?? cheapest?.id
 }
 
+/**
+ * Effort a retry must name after the endpoint rejected "no reasoning", or
+ * `undefined` when the route offers no level that could replace it.
+ *
+ * A route whose reasoning is mandatory still reports `off` as supported when
+ * the profile mapped it to `null` (the adapter drops the mapping instead of
+ * recording a refusal), so this is decided from the failure, not up front: the
+ * route's own default effort is preferred, else the cheapest level it offers.
+ */
+export function forcedReasoningEffort(info) {
+  const reasoning = info?.reasoning
+  if (reasoning === undefined) return undefined
+  const efforts = Array.isArray(reasoning.efforts) ? reasoning.efforts : []
+  const named = efforts.filter((effort) => typeof effort?.id === 'string' && effort.id !== 'off')
+  if (named.length === 0) return undefined
+  const preferred = named.find((effort) => effort.id === reasoning.defaultEffort)
+  return preferred?.id ?? named[0].id
+}
+
+/** Whether one failure is an endpoint refusing to run without reasoning. */
+export function isForcedReasoningFailure(failure) {
+  const message = typeof failure?.message === 'string' ? failure.message : ''
+  return /reasoning is (?:mandatory|required)|reasoning[^.]{0,40}cannot be disabled/i.test(message)
+}
+
 // ---------------------------------------------------------------------------
 // Model call entry point
 // ---------------------------------------------------------------------------
@@ -548,47 +576,61 @@ export async function proposeTitle(ctx, sessionId, signal) {
   // is a fallback the dialog can name instead of silently switching models.
   const fallback = route !== routes[0]
   const reasoningEffort = titleReasoningEffort(info)
-  const maxTokens = reasoningEffort === undefined ? POLICY.maxOutputTokens : POLICY.maxReasoningOutputTokens
 
   const timeout = AbortSignal.timeout(POLICY.timeoutMs)
   const composed = signal === undefined ? timeout : AbortSignal.any([signal, timeout])
 
-  let text = ''
-  let finish
-  try {
-    for await (const chunk of streamTitle(ctx, {
-      provider: route.provider,
-      model: route.model,
-      ...(reasoningEffort === undefined ? {} : { reasoningEffort }),
-      system: SYSTEM_PROMPT,
-      messages: [{ role: 'user', content: [{ type: 'text', text: frameTurns(bounded) }] }],
-      maxTokens,
-      sessionId,
-      purpose: 'session-title',
-      signal: composed,
-    })) {
-      if (chunk?.type === 'text-delta' && typeof chunk.text === 'string') text += chunk.text
-      else if (chunk?.type === 'finish') finish = chunk.reason
+  // One call, translated to this plugin's failures. An unnamed effort is the
+  // cheap path: the host decides, which is right for every route whose
+  // reasoning may be turned off.
+  const attempt = async (effort) => {
+    let text = ''
+    let finish
+    try {
+      for await (const chunk of streamTitle(ctx, {
+        provider: route.provider,
+        model: route.model,
+        ...(effort === undefined ? {} : { reasoningEffort: effort }),
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: [{ type: 'text', text: frameTurns(bounded) }] }],
+        maxTokens: effort === undefined ? POLICY.maxOutputTokens : POLICY.maxReasoningOutputTokens,
+        sessionId,
+        purpose: 'session-title',
+        signal: composed,
+      })) {
+        if (chunk?.type === 'text-delta' && typeof chunk.text === 'string') text += chunk.text
+        else if (chunk?.type === 'finish') finish = chunk.reason
+      }
+    } catch (error) {
+      if (signal?.aborted) throw error
+      if (timeout.aborted) {
+        throw new TitlerError('timeout', 504, `the model did not answer within ${POLICY.timeoutMs} ms`)
+      }
+      // A failure this plugin already classified (an unsupported host, say)
+      // keeps its own code instead of being flattened into a generic one.
+      if (error instanceof TitlerError) throw error
+      if (error?.code === 'NO_ADAPTER') throw noAdapterOn(route)
+      throw new TitlerError('llm-error', 502, messageOf(error))
     }
-  } catch (error) {
-    if (signal?.aborted) throw error
-    if (timeout.aborted) {
-      throw new TitlerError('timeout', 504, `the model did not answer within ${POLICY.timeoutMs} ms`)
-    }
-    // A failure this plugin already classified (an unsupported host, say)
-    // keeps its own code instead of being flattened into a generic one.
-    if (error instanceof TitlerError) throw error
-    if (error?.code === 'NO_ADAPTER') throw noAdapterOn(route)
-    throw new TitlerError('llm-error', 502, messageOf(error))
+    const failure = finishFailure(finish, route, timeout.aborted)
+    const title = titleFromText(text)
+    // A `max-tokens` finish with usable text is accepted: the title line came
+    // out, only the model's trailing rambling was cut, and the user still
+    // reviews the proposal before anything is written.
+    const tolerated = finish?.kind === 'max-tokens' && title !== ''
+    return { title, failure: tolerated ? undefined : failure }
   }
 
-  const failure = finishFailure(finish, route, timeout.aborted)
-  const title = titleFromText(text)
-  // A `max-tokens` finish with usable text is accepted: the title line came
-  // out, only the model's trailing rambling was cut, and the user still
-  // reviews the proposal before anything is written.
-  const tolerated = finish?.kind === 'max-tokens' && title !== ''
-  if (failure !== undefined && !tolerated) throw failure
+  let outcome = await attempt(reasoningEffort)
+  // A route this plugin could not identify as mandatory still answers, once:
+  // it refuses the reasoning-off payload. Retrying with a named effort is the
+  // only way to tell the two apart, and it costs one rejected round trip.
+  if (outcome.failure !== undefined && reasoningEffort === undefined && isForcedReasoningFailure(outcome.failure)) {
+    const forced = forcedReasoningEffort(info)
+    if (forced !== undefined) outcome = await attempt(forced)
+  }
+  if (outcome.failure !== undefined) throw outcome.failure
+  const title = outcome.title
   if (title === '') throw new TitlerError('llm-error', 502, 'the model produced no title text')
 
   return {

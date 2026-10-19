@@ -100,6 +100,43 @@ function modelProbe(facts) {
   }
 }
 
+/** The refusal an endpoint with mandatory reasoning answers a reasoning-off call. */
+const FORCED_REASONING_FAILURE = {
+  kind: 'error',
+  failure: {
+    code: 'INVALID_REQUEST',
+    message:
+      '400: {"message":"Reasoning is mandatory for this endpoint and cannot be disabled.","code":400,"metadata":{"provider_name":null}}',
+  },
+}
+
+/**
+ * A model stream that refuses a call without a named effort, then answers.
+ *
+ * This is the shape a profile declaring `reasoningEfforts: { off: null }`
+ * takes: the adapter drops the mapping, the level reads back as supported, and
+ * only the endpoint itself says otherwise.
+ */
+function forcedReasoningStream(calls) {
+  return async function* stream(options) {
+    calls.push(options)
+    if (options.reasoningEffort === undefined) {
+      yield { type: 'finish', reason: FORCED_REASONING_FAILURE }
+      return
+    }
+    yield { type: 'text-delta', text: 'A generated title' }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+}
+
+/** A model stream that refuses every call. */
+function alwaysForcedStream(calls) {
+  return async function* stream(options) {
+    calls.push(options)
+    yield { type: 'finish', reason: FORCED_REASONING_FAILURE }
+  }
+}
+
 /** A model stream that records the complete request options before answering. */
 function optionsStream(calls) {
   return async function* stream(options) {
@@ -300,6 +337,90 @@ test('a route that may turn reasoning off keeps the plain budget', async () => {
   await proposeTitle(ctx, 'session-1')
   assert.equal('reasoningEffort' in calls[0], false)
   assert.equal(calls[0].maxTokens, 256)
+})
+
+test('a route that only looks reasoning-optional is retried with a named effort', async () => {
+  const calls = []
+  const ctx = context({
+    stream: forcedReasoningStream(calls),
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': {
+        reasoning: { efforts: [{ id: 'off' }, { id: 'high' }, { id: 'max' }] },
+      },
+    }),
+  })
+  const proposal = await proposeTitle(ctx, 'session-1')
+  assert.equal(proposal.title, 'A generated title')
+  assert.equal(calls.length, 2)
+  assert.equal('reasoningEffort' in calls[0], false)
+  assert.equal(calls[0].maxTokens, 256)
+  assert.equal(calls[1].reasoningEffort, 'high')
+  assert.equal(calls[1].maxTokens, 2_048)
+})
+
+test('the retried effort prefers the route default over the cheapest level', async () => {
+  const calls = []
+  const ctx = context({
+    stream: forcedReasoningStream(calls),
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': {
+        reasoning: { efforts: [{ id: 'off' }, { id: 'low' }, { id: 'high' }], defaultEffort: 'high' },
+      },
+    }),
+  })
+  await proposeTitle(ctx, 'session-1')
+  assert.equal(calls[1].reasoningEffort, 'high')
+})
+
+test('a refused route with nothing but off is reported instead of retried', async () => {
+  const calls = []
+  const ctx = context({
+    stream: forcedReasoningStream(calls),
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': { reasoning: { efforts: [{ id: 'off' }] } },
+    }),
+  })
+  await assert.rejects(proposeTitle(ctx, 'session-1'), (error) => {
+    assert.equal(error.code, 'llm-error')
+    assert.equal(error.status, 502)
+    assert.match(error.message, /Reasoning is mandatory/)
+    return true
+  })
+  assert.equal(calls.length, 1)
+})
+
+test('a second refusal is reported rather than retried again', async () => {
+  const calls = []
+  const ctx = context({
+    stream: alwaysForcedStream(calls),
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': { reasoning: { efforts: [{ id: 'off' }, { id: 'high' }] } },
+    }),
+  })
+  await assert.rejects(proposeTitle(ctx, 'session-1'), (error) => {
+    assert.match(error.message, /Reasoning is mandatory/)
+    return true
+  })
+  assert.equal(calls.length, 2)
+})
+
+test('an unrelated stream failure is not retried', async () => {
+  const calls = []
+  const ctx = context({
+    stream: async function* stream(options) {
+      calls.push(options)
+      yield { type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', message: '500: upstream failed' } } }
+    },
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': { reasoning: { efforts: [{ id: 'off' }, { id: 'high' }] } },
+    }),
+  })
+  await assert.rejects(proposeTitle(ctx, 'session-1'), (error) => {
+    assert.equal(error.code, 'llm-error')
+    assert.match(error.message, /500: upstream failed/)
+    return true
+  })
+  assert.equal(calls.length, 1)
 })
 
 test('a session with nothing to summarize still reports no-content', async () => {
