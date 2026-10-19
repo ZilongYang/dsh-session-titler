@@ -270,10 +270,17 @@ color:var(--dsw-alias-label-primary-foreground)}
         }
         set({ phase: 'applying', error: null })
         try {
+          // Same shape as the shipped rename (`ui-workspace`): the method must
+          // stay attached to its session. Detaching it (`const rename = …`)
+          // loses `this`, and Session.rename reads `this.remote` on its first
+          // line, so an unbound call throws "Cannot read properties of
+          // undefined (reading 'remote')".
           const result = await sessions.using(sessionId, { source: 'workspaceOperation' }, (reference) => {
-            const rename = reference?.binding?.session?.rename
-            if (typeof rename !== 'function') throw new Error(t('unavailable'))
-            return rename(title)
+            const session = reference?.binding?.session
+            if (session === undefined || typeof session.rename !== 'function') {
+              throw new Error(t('unavailable'))
+            }
+            return session.rename(title)
           })
           if (disposed) return
           if (!result || result.ok !== true) {
