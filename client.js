@@ -45,6 +45,7 @@ window.__ModuleLoader__.load({
         usedModelFallback: '使用模型：{model}（该会话记录的模型在当前 profile 不可用，已回退）',
         noContent: '该会话还没有可总结的内容。',
         noAdapter: '该会话记录的模型路由「{route}」在当前 profile 没有已注册的适配器，默认模型也不可用。请换一个模型，或为当前 profile 配置该 provider。',
+        noModel: '该会话记录的模型「{route}」在当前 profile 里已不存在（provider 还在，但没配置这个模型），默认模型也不可用。请换一个模型，或把这个模型加回来。',
         noAdapterUnknown: '当前 profile 里没有可用的模型路由（会话没有记录过模型，默认模型也未注册适配器）。请先在模型选择里指定一个可用模型。',
         forbidden: '本机未授权该请求（插件路由需要 loopback 或受信任主机）。',
         unavailable: '插件 Host 侧不可用，请确认已安装并在当前 profile 中启用。',
@@ -67,6 +68,7 @@ window.__ModuleLoader__.load({
         usedModelFallback: 'Model: {model} (the model this session recorded is unavailable in this profile, so this is a fallback)',
         noContent: 'This session has nothing to summarize yet.',
         noAdapter: 'The model route this session recorded ("{route}") has no registered adapter in this profile, and neither has the default model. Pick another model, or configure that provider for this profile.',
+        noModel: 'The model this session recorded ("{route}") no longer exists in this profile: the provider is mounted, but this model id is not configured there, and the default model does not help either. Pick another model, or add that model back.',
         noAdapterUnknown: 'No usable model route is available in this profile: the session recorded none and the default model has no registered adapter. Pick an available model first.',
         forbidden: 'This request is not authorized (the plugin route needs a loopback or trusted host).',
         unavailable: 'The plugin host half is unavailable; make sure it is installed and enabled in this profile.',
@@ -218,6 +220,9 @@ color:var(--dsw-alias-label-primary-foreground)}
           return typeof error?.route === 'string' && error.route !== ''
             ? t('noAdapter', { route: error.route })
             : t('noAdapterUnknown')
+        }
+        if (code === 'no-model' && typeof error?.route === 'string' && error.route !== '') {
+          return t('noModel', { route: error.route })
         }
         if (error?.status === 404 && code === 'http-404') return t('unavailable')
         return t('failed', { message: typeof error?.message === 'string' ? error.message : '' })
