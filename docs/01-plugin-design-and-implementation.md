@@ -465,15 +465,39 @@ return session.rename(title)
 
 **现象**：用 openrouter 的 `openai/gpt-oss-20b` 的会话点「生成标题」→ `生成失败：400: {"message":"Reasoning is mandatory for this endpoint and cannot be disabled.","code":400,"metadata":{"provider_name":null}}`。
 
-**根因**：该 profile 把这个模型声明成 `reasoningEfforts: { off: null, high, max }`——`off: null` 的含义是「这个端点关不掉推理」，pi-ai 的 `getSupportedThinkingLevels()` 也会把值为 `null` 的档位从可用集合里剔除。本插件此前只传 `provider` / `model` / `maxTokens`，不传 `reasoningEffort`；pi-ai 在 openrouter 格式下遇到「没指定档位」会显式发 `reasoning: { effort: thinkingLevelMap.off ?? 'none' }`，即 `{ effort: 'none' }`，被端点拒绝。
+**根因（三段，缺一不成）**：
 
-**修正**：
+1. **端点侧**：OpenRouter 上的 `openai/gpt-oss-20b` 把推理改为强制，任何「关闭推理」的请求都被拒（`400 Reasoning is mandatory for this endpoint and cannot be disabled`）。
+2. **宿主侧把「关不掉」编译成了「可以关」**：profile 声明 `reasoningEfforts: { 'off': null, high: high, max: max }`，本意是「off 档位不可用」。但 `dsh-llm-pi-ai/lib/index.js` 的 `resolveModelReasoning()`（:598-607）编译 pi-ai 的 `thinkingLevelMap` 时是
 
-1. `titleReasoningEffort(info)`：没有 `info.reasoning` → 不传（宿主自己决定）；`efforts` 里有 `off` → 不传（保持最省路径）；否则取 `defaultEffort`，没有就取它给出的第一个档位；
-2. 这种情况下把输出预算放宽到 `POLICY.maxReasoningOutputTokens = 2048`：思考会吃掉 256 的绝大部分，标题还没开始写就撞 `max-tokens`；
-3. `resolveModelInfo` 一次探测同时服务这两件事（可用性 + 推理能力），不多花一次往返。
+   ```js
+   for (const level of THINKING_LEVELS) {
+     const wire = efforts[level]
+     if (wire === void 0) map[level] = null      // 没声明 → null（不支持）
+     else if (wire !== null) map[level] = wire   // 声明了 → 线的值
+   }                                             // 声明为 null → 键「缺失」
+   ```
+
+   声明为 `null` 的档位既不写 `null`（不支持）也不写值，键就**缺失**。pi-ai 的 `getSupportedThinkingLevels()`（同文件 :771-779）只把**值为 `null`** 的档位剔除，键缺失被读作「支持、发送时省略该参数」；于是 `off` 仍被报为可用，`reasoningInfo()` 给出的 efforts 里带着 `{ id: 'off' }`。
+3. **调用侧显式发了「关闭」**：不传 `reasoningEffort` 时，pi-ai 的 `openai-completions.js:682-692`（openrouter 格式）走
+
+   ```js
+   if (options?.reasoningEffort) openRouterParams.reasoning = { effort: map?.[options.reasoningEffort] ?? options.reasoningEffort }
+   else if (model.thinkingLevelMap?.off !== null) openRouterParams.reasoning = { effort: model.thinkingLevelMap?.off ?? 'none' }
+   ```
+
+   键缺失 → `map.off` 为 `undefined` → `!== null` 成立 → `?? 'none'` → 发 `{ effort: 'none' }` → 400。通用协议的同一逻辑在 :677-679（`:670-681` 分支）。
+
+**为什么不能提前判定（第一版补丁失效的原因）**：`resolveModelInfo()` 对「容忍省略推理」与「强制推理」的端点返回**同一个形状**——两者 efforts 里都含 `off`，宿主没有信息能区分。第一版补丁按「efforts 含 `off` 就不传档位」处理，于是又撞回 400。这不是安装没生效（补丁版 `title.js` 24250 B 确实在 profile 里），是判断依据本身不可靠。
+
+**修正（最终形态：被拒一次再带档位重试）**：
+
+1. `titleReasoningEffort(info)` 只负责**能提前识别**的形状：无 `info.reasoning` → 不传（宿主自己决定）；efforts 含 `off` → 不传（对容忍省略的端点保持最省路径、零额外往返）；否则取 `defaultEffort`，没有就取第一个档位；
+2. 调用失败后由 `isForcedReasoningFailure(failure)` 认端点原文（`/reasoning is (?:mandatory|required)|reasoning…cannot be disabled/i`），命中且本次没指定档位时，用 `forcedReasoningEffort(info)`（`defaultEffort`，否则第一个非 `off` 档位）**重试一次**，并把预算放宽到 `POLICY.maxReasoningOutputTokens = 2048`（思考会吃掉 256 的绝大部分，标题还没开始写就撞 `max-tokens`）；
+3. 只重试一次：该路由只剩 `off`、重试仍被拒、或失败文本与推理无关时都按原失败上报（不循环、不误伤 `500` 之类）；
+4. 实现点：`proposeTitle()` 内新增 `attempt(effort)` 闭包（一次调用的完整失败翻译：timeout / abort / TitlerError / `NO_ADAPTER` / 通用 `llm-error`），重试共享同一个 `AbortSignal.timeout(POLICY.timeoutMs)`；`forcedReasoningEffort()` 与 `isForcedReasoningFailure()` 一并导出以便单测。
 
 #### A8.3 验证
 
-- 单测从 19 条增到 **25 条**（`test/title.test.js` 新增 6 条：模型已删除时回退、全灭报 `no-model`（含 `status` 与 `details.route`）、`MISSING_CREDENTIAL` 不触发过滤、强制推理端点带档位且预算 2048、`defaultEffort` 优先于最省档位、`efforts` 含 `off` 时不传 `reasoningEffort`）。`npm test` = `node --test`，无网络、无依赖。
+- 单测从 19 条增到 **30 条**（`test/title.test.js` 新增 11 条：模型已删除时回退、全灭报 `no-model`（含 `status` 与 `details.route`）、`MISSING_CREDENTIAL` 不触发过滤、强制推理端点带档位且预算 2048、`defaultEffort` 优先于最省档位、`efforts` 含 `off` 时不传 `reasoningEffort`，以及重试链路 5 条：看着可关推理但被端点 400 拒 → 第二次带档位且预算 2048、重试档位优先 `defaultEffort`、只剩 `off` 时只发一次、二次仍拒不再重试、无关失败（`500`）不重试）。`npm test` = `node --test`，无网络、无依赖。
 - README 同步：数据流图的候选校验、错误码表新增 `no-model`、POLICY 表新增 `maxReasoningOutputTokens`、失败契约的 `route` 字段、已知限制里的输出预算。
