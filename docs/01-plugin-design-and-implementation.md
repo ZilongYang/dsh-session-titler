@@ -410,3 +410,36 @@ ctx.slots.inject('shell.overlay', () => ctx.slots.register({
 **已知残留**：客户端那一半在双源下由 `dsh-client-modules` 按包名拒绝（`duplicate graph entry` / `multiple active Loader sources`），插件侧无法修复，只能靠清理安装源；README「已知限制」已写明。
 
 **单测**：`test/host.test.js` 6 条（重复挂载不抛且最新 handler 生效、旧 fiber 不误删继任路由、单挂载卸载即摘除、无关注册错误仍上抛、外来同 path 路由不被抢、双挂载后路由仍能返回 200 提案）+ `test/title.test.js` 新增 2 条（只有 `prepareCall` 时仍出标题且入参为 `{provider, model, maxTokens}`；两者都无 → `unsupported-host` / 501）。`npm test` = 19 条全绿。方案与偏差见 `docs/PLAN-2026-10-16.md`，验收勾选见 `docs/RELEASE-CHECKLIST-0.2.0.md`。
+
+### A7 「确认修改」必崩：方法被摘出后丢 `this`（0.2.0 引入，2026-10-19 修，0.2.1）
+
+**现象（子龙实测，DSH 0.2.1-rc.2）**：弹窗能正常生成标题，但点「确认修改」后弹窗只留一行红字 `Cannot read properties of undefined (reading 'remote')`，标题永远写不进去。
+
+**根因**：0.2.0 那次「存在性判断」把方法**摘成了变量再裸调用**：
+
+```js
+// 0.2.0（错）：摘出方法 → 严格模式下裸调用，this === undefined
+const rename = reference?.binding?.session?.rename
+if (typeof rename !== 'function') throw new Error(t('unavailable'))
+return rename(title)
+```
+
+`Session.rename` 是类方法，函数体第一句就是 `this.remote.session.rename({ sessionId, title })`（`@deepseek-ai/dsh-api-session-controller` 的 `src/client/sessions/session.ts`），而插件的客户端模块是严格模式，`this` 丢失后**报错文本正好是那句 `reading 'remote'`**。0.2.0 之前的写法是好的（`git show 8d2982c~1:client.js` → `reference.binding.session.rename(title)`），官方入口也是这个方法调用形态（`packages/client/ui-workspace/src/client/index.ts` 的 `renameSession`，与本插件同一个 `{ source: 'workspaceOperation' }`）。
+
+**修正**：保留存在性判断，但把方法**留在 session 上调用**：
+
+```js
+const session = reference?.binding?.session
+if (session === undefined || typeof session.rename !== 'function') {
+  throw new Error(t('unavailable'))
+}
+return session.rename(title)
+```
+
+**为什么拖到现在才暴露**：0.2.0 的实机验收只跑了「挂载 + 生成」，`docs/PLAN-2026-10-16.md` 事后补记第 1 条已写明 §6 的实机项未执行 —— 点确认这一步 0.2.0 之后从没跑过。**与 DSH 更新无关**：0.2.0-rc.2 / 0.2.1-alpha.4 / 0.2.1-rc.2 三个 tag 的 `client/sessions` 源码逐行相同，`rename` 一直是读 `this.remote` 的类方法。
+
+**验证路径与实机结果**：客户端半边改动**刷新页面即生效**（Host 半边未动，不用重启 DSH）。2026-10-19 在桌面版（App `Info.plist` 版本 = `0.2.1-rc.2`，profile = `desktop`）实机验证：把修好的 `client.js` 覆盖进 `~/.dsh/profiles/desktop/node_modules/dsh-session-titler/` 后，「生成标题 → 确认修改」**成功写入标题**，左侧列表立刻更新、刷新页面仍在。故 `dsh.compatibility.dshReleases` 里 `0.2.1-rc.2` 标为 `compatible`。
+
+**部署时踩到的坑（本轮新增）**：本机三个 profile 各有一份**拷贝**（不是 `link:`）：`main` 0.2.0、`desktop` 0.2.0、`web` 0.1.2。桌面 App 实际跑的是 **`desktop`** profile（判据：该 profile 装了本会话可见的 `dsh-zotero` / `dsh-zl-rental`，而 `main` 没有 zotero）。第一次只覆盖了 `main`，现象完全不变；覆盖 `desktop` 后才生效。→ **改完代码要按「运行中的那个 profile」部署，别按记忆里的 profile。**
+
+**版本自适应结论（0.2.1-rc.2 vs 0.2.1-alpha.4 逐包 diff，GitHub tag 源码）**：`packages/api/session-controller`、`packages/api/gateway`、`packages/api/remotes` 除 `package.json` 版本号外**无代码差异**；本插件用到的客户端 API 形状不变。新增的官方 `dsh-session-title` / `dsh-experimental-session-titles-bundle` 是**标题 provider**，与本插件「不注册 provider、只在用户点击时显式生成」的路线不冲突。

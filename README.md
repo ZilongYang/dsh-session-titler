@@ -164,8 +164,11 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 |---|---|---|
 | `0.2.0-rc.2` | 已验证可用 | 0.1.x 全程实测；0.2.0 起按本节所述改造 |
 | `0.2.1-alpha.2` | 已验证可用 | 桌面版内置版本；逐包 diff 过插件用到的全部 API（见 `docs/01` 附录 A6），单测覆盖 |
-| `0.2.1-alpha.3` / `alpha.4` | 未实测 | `alpha.4` 已从 npm 取源码 diff（插件可见 API 未变），但未实机跑过，故声明里标 `unknown` |
+| `0.2.1-alpha.3` / `alpha.4` / `alpha.5` / `rc.1` | 未实测 | `alpha.4` 已从 npm 取源码 diff（插件可见 API 未变），但未实机跑过，故声明里标 `unknown` |
+| `0.2.1-rc.2` | 已验证可用 | 桌面版与 CLI 均为该版本；客户端 `session-controller`/`gateway` 逐包 diff 无代码差异，「确认修改」实机验证通过（见 `docs/01` 附录 A7） |
 | `< 0.2.0-rc.1` / `>= 0.3.0` | 不支持 | 声明范围之外 |
+
+> **0.2.1 修了什么**：0.2.0 为了给重命名路径加存在性判断，把 `binding.session.rename` 摘成变量再裸调用，严格模式下丢了 `this`，于是点「确认修改」必报 `Cannot read properties of undefined (reading 'remote')`。0.2.1 改回与官方「重命名」同形的**方法调用**（`session.rename(title)`）。完整证据链见 `docs/01` 附录 A7。
 
 `package.json` 里有两处声明，含义不同：
 
@@ -191,6 +194,7 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 - [`docs/02-open-source-and-marketplace.md`](docs/02-open-source-and-marketplace.md) —— 开源、npm 发布与社区插件市场上架流程。
 - [`docs/PLAN-2026-10-16.md`](docs/PLAN-2026-10-16.md) —— 0.2.0 方案（修复 0.2.1-alpha.x 重复挂载崩溃 + 版本自适应），批准正文原样存档，文末有事后补记。
 - [`docs/RELEASE-CHECKLIST-0.2.0.md`](docs/RELEASE-CHECKLIST-0.2.0.md) —— 0.2.0 发版/验收打勾清单（含未完成的实机验收项）。
+- [`docs/RELEASE-CHECKLIST-0.2.1.md`](docs/RELEASE-CHECKLIST-0.2.1.md) —— 0.2.1 发版/验收打勾清单（修「确认修改」必崩，附录 A7）。
 
 ## License
 
