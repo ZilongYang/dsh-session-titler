@@ -31,9 +31,9 @@
 
 ## 4. 发布
 
-- [ ] `npm --cache /tmp/dsh-npm-cache publish`（沙箱下默认 `~/.npm` 会被拒；2FA 见 `docs/02`「坑 1」）。
+- [x] `npm --cache /tmp/dsh-npm-cache publish`（沙箱下默认 `~/.npm` 会被拒；2FA 见 `docs/02`「坑 1」）→ `+ dsh-session-titler@0.2.1`，PUT 202。
 - [ ] 判定以**版本端点**为准（`curl -s https://registry.npmjs.org/dsh-session-titler/0.2.1`），packument 有约 10 分钟负缓存（「坑 2」）。
-- [ ] `git push origin main`。
+- [x] `git push origin main`（6e606ce..58b4a2c）。
 - [ ] 社区市场**无需**重新提 PR（`awesome-dsh-plugin` 列表按仓库自动收录，条目已在 PR #6327）。
 - [ ] 本机 `desktop` / `main` 两个 profile 的拷贝版已手动更新到 0.2.1 的 `client.js`；正式走市场升级后可覆盖。
 
