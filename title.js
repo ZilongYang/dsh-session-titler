@@ -346,10 +346,14 @@ async function pickRoute(ctx, sessionId) {
       rejected.push({ route, problem: 'no-adapter' })
       continue
     }
-    const resolve = ctx.llm?.resolveModelInfo
-    if (typeof resolve !== 'function') return { route, routes, rejected }
+    // Called through its owner: `resolveModelInfo` is a service method and
+    // reads `this`, so pulling it off the object throws a TypeError of its
+    // own — which the catch below would read as "not this route's fault" and
+    // dispatch the very route this probe exists to reject.
+    const llm = ctx.llm
+    if (llm === undefined || typeof llm.resolveModelInfo !== 'function') return { route, routes, rejected }
     try {
-      return { route, routes, info: await resolve(route.provider, route.model), rejected }
+      return { route, routes, info: await llm.resolveModelInfo(route.provider, route.model), rejected }
     } catch (error) {
       const problem = GONE_ROUTE_CODES[error?.code]
       // Any other failure (a missing credential, say) is not the route's
