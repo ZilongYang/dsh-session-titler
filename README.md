@@ -68,7 +68,9 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
       │                                                        ├─ 组装 transcript（32 KiB 预算，条目级截断）
       │                                                        ├─ 路由候选（新→旧）：活会话 requestHeader().config
       │                                                        │    → 日志每条 request/header → agentDefaultModel 默认模型
-      │                                                        │    每个候选都要在 llm.listProviders() 里（探测失败则不过滤）
+      │                                                        │    每个候选都要过 listProviders() 与 resolveModelInfo()
+      │                                                        │    （探测不可用就不过滤，绝不把能成功的调用弄坏）
+      │                                                        │    强制推理的端点：被拒一次后带档位重试 + 放宽输出预算
       │                                                        └─ ctx.llm.stream({ …, purpose:'session-title' })
       │  { ok:true, value:{ title, provider, model, fallback, messages, truncated } }
       ▼
@@ -90,7 +92,7 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
 | `package.json` | bundle 补丁声明 + `dsh.client`（web 平台、客户端模块依赖） |
 | `cordis.patch.yml` | 往 profile 插一行 host 插件（`id: session-titler`） |
 | `index.js` | Host 半：注册 `/session-titler/propose`（**幂等挂载**：重复挂载时由最新一次接管路由），做请求围栏、体积上限、错误映射 |
-| `title.js` | Host 半：读会话 → 选模型路由（每个候选都校验已注册 adapter）→ 组装/裁剪 transcript → 经 `streamTitle()` 调模型（优先 `ctx.llm.stream`，兜底 `ctx.llm.prepareCall`）→ 标题归一化 |
+| `title.js` | Host 半：读会话 → 选模型路由（每个候选都校验已注册 adapter **且当前 profile 仍配置该模型**）→ 组装/裁剪 transcript → 经 `streamTitle()` 调模型（优先 `ctx.llm.stream`，兜底 `ctx.llm.prepareCall`）→ 标题归一化 |
 | `test/title.test.js` | 路由解析、失败映射与调用降级的单元测试（`npm test` = `node --test`，不进 npm 包） |
 | `test/host.test.js` | 挂载幂等性单元测试：重复挂载不抛、最新 handler 生效、旧 fiber 不误删新路由（同样不进 npm 包） |
 | `fence.js` | Host 半：loopback / 同源请求校验（DNS-rebinding、CSRF 防护，**不是**鉴权） |
@@ -107,9 +109,9 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
 { "ok": true, "value": { "title": "…", "provider": "…", "model": "…", "fallback": false, "messages": 14, "truncated": false } }
 ```
 
-`fallback: true` 表示会话自己记录的路由在当前 profile 里没有已注册 adapter，本次是**回退**到日志里更早的可用路由或 `llm-pi-ai`/`agentDefaultModel` 的默认模型生成的；弹窗会显示「使用模型：X（…已回退）」。
+`fallback: true` 表示会话自己记录的路由在当前 profile 里已经不能派发——该 provider 没有已注册 adapter，或者 provider 还在但那个模型 id 已被删除/改名——本次是**回退**到日志里更早的可用路由或 `llm-pi-ai`/`agentDefaultModel` 的默认模型生成的；弹窗会显示「使用模型：X（…已回退）」。
 
-失败：`{ "ok": false, "error": { "code": "…", "message": "…", … } }`（`no-adapter` 额外带 `route`）
+失败：`{ "ok": false, "error": { "code": "…", "message": "…", … } }`（`no-adapter` / `no-model` 额外带 `route`）
 
 | code | HTTP | 触发 |
 |---|---|---|
@@ -121,6 +123,7 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
 | `no-content` | 409 | 表面里没有 user / assistant 文本 |
 | `timeout` | 504 | 30 s 未回 |
 | `no-adapter` | 502 | 会话记录的路由 + 默认模型都没有已注册的 adapter（响应带 `route`，弹窗给中文可操作提示） |
+| `no-model` | 502 | 会话记录的 provider 还在、但那个模型 id 在当前 profile 里已不存在，默认模型也不可用（响应带 `route`） |
 | `llm-error` | 502 | finish 非 `stop`、模型未产出文本 |
 | `unsupported-host` | 501 | 宿主既没有 `ctx.llm.stream` 也没有 `ctx.llm.prepareCall`（当前所有实测版本两者至少有一个） |
 | `internal` | 500 | 其它 |
@@ -133,6 +136,7 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
 |---|---|---|
 | `maxInputBytes` | 32768 | 送进模型的 transcript 字节上限 |
 | `maxOutputTokens` | 256 | 标题输出的 token 上限（DSH 自带的首条消息 provider 用 64；整段会话会让推理模型把 64 全花在思考上，故放宽） |
+| `maxReasoningOutputTokens` | 2048 | 端点**不允许关闭推理**时的输出上限：思考会吃掉一部分预算，256 会让标题在 `max-tokens` 处被截掉（只在这类端点被识别出来后才用） |
 | `timeoutMs` | 30000 | 单次标题调用的墙钟预算 |
 | `maxTitleBytes` | 120 | 接受标题的 UTF-8 字节上限 |
 | `userCharsPerMessage` / `assistantCharsPerMessage` | 2000 / 3000 | 单条消息裁剪上限 |
@@ -155,7 +159,7 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 - 本仓库以 `link:` 方式挂进 profile，所以**改代码不用重装**。
 - **Client 半**（`client.js`）：刷新页面生效；插件刚装好时 Host 会推送模块图变更，通常无需刷新就会激活。
 - **Host 半**（`index.js` / `title.js` / `fence.js`）：**必须重启 DSH**。宿主进程内的 ESM 模块缓存不会因装卸载而失效——这是本插件开发中真实踩到的：改完 `title.js` 后路由行为不变，重启后才生效。
-- **单测**：`npm test`（= `node --test`，Node ≥ 20.3）。共 19 条：`test/title.test.js` 覆盖路由候选的 adapter 校验、失败映射与调用降级（只有 `prepareCall` / 两者都无）；`test/host.test.js` 覆盖挂载幂等（重复挂载不抛、最新 handler 生效、旧 fiber 不误删新路由、无关注册错误仍上抛、双挂载后路由仍能返回提案）。不联网、不装依赖。`test/` 不在 npm 包的 `files` 里。
+- **单测**：`npm test`（= `node --test`，Node ≥ 20.3）。共 31 条：`test/title.test.js` 覆盖路由候选的 adapter + 模型校验（模型已删除时回退、全灭报 `no-model`、非路由性探测失败不过滤、探测方法必须带接收者调用）、强制推理端点的档位与预算（含「看着能关推理、实际被端点拒绝」的一次重试；只剩 `off` 时不重试、二次仍拒不再重试、无关失败不重试）、失败映射与调用降级（只有 `prepareCall` / 两者都无）；`test/host.test.js` 覆盖挂载幂等（重复挂载不抛、最新 handler 生效、旧 fiber 不误删新路由、无关注册错误仍上抛、双挂载后路由仍能返回提案）。不联网、不装依赖。`test/` 不在 npm 包的 `files` 里。
 
 
 ## 支持的 DSH 版本与兼容声明
@@ -178,7 +182,7 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 
 市场化里提示「不兼容 / 已停止安装」时：确认你的 DSH 确实在声明范围内；若你明确要冒险试装，用 `dsh plugin allow-version` 或在插件页授予 **exact-version 豁免**（写进 profile 的 `compatibility.json`，只对“该插件的该版本 + 该 DSH 版本”这一对生效）。
 
-**运行时不自报版本，按能力自适应**：`index.js` / `title.js` 不猜版本号，而是探测宿主实际有什么——`llm.stream` 优先、`llm.prepareCall` 兜底、`listProviders` 缺失就不做路由过滤、客户端 `sessions.using` 缺失就给可读文案。所以同一份代码在 0.2.0-rc.2 与 0.2.1-alpha.x 上都能跑，不需要分支版本号。
+**运行时不自报版本，按能力自适应**：`index.js` / `title.js` 不猜版本号，而是探测宿主实际有什么——`llm.stream` 优先、`llm.prepareCall` 兜底、`listProviders` / `resolveModelInfo` 缺失就不做对应的路由过滤、客户端 `sessions.using` 缺失就给可读文案。所以同一份代码在 0.2.0-rc.2 与 0.2.1-alpha.x 上都能跑，不需要分支版本号。
 
 ## 已知限制
 
@@ -186,7 +190,7 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 - **同一个 profile 里不要保留两个安装源**：插件市场会把装好的包“热挂载”进当前进程，同时它也可能出现在 profile 的 `dsh.profile.bundles` 里；两边同时生效时，Host 半已能做到幂等（只保留一条路由并打一条警告），但 DSH 的客户端模块表按**包名**去重，会直接拒绝该包（`client-modules: package dsh-session-titler resolves from multiple active Loader sources … remove one entry`），于是两个 UI 入口都不会出现。这一步只能靠清理安装源解决：在插件页/`dsh plugin` 里删掉多余的那一份，或者把 `dsh.profile.bundles` 里的条目去掉。日志里出现 `mounted from more than one loader source` 就是该清理的信号。
 - 弹窗是自写组件（按官方规范不 import `dsh-client-ui-primitives`），样式只引用 `--dsw-alias-*` / `--dsw-radius-*` / `--dsw-elevation-*` token；视觉与宿主的 Modal / 菜单行对齐，但不共享宿主组件的行为升级。
 - 不做自动标题：不会在后台为任何会话生成标题，也不会改动 DSH 自带的标题 provider。
-- 每次点击消耗一次模型调用（输出 ≤ 256 token，输入 ≤ 32 KiB），且**只读**，不写会话。
+- 每次点击消耗一次模型调用（输出 ≤ 256 token，被判定为强制推理的端点 ≤ 2048，输入 ≤ 32 KiB），且**只读**，不写会话。宿主无法提前区分「推理可关」与「强制推理」的端点（两者在模型元数据里同形），所以后者会先被拒一次（立即 400），随后带档位重试成功——净消耗仍是 1 次生成 + 1 次被拒的空往返。
 
 ## 设计与发布文档
 

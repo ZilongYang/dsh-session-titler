@@ -443,3 +443,80 @@ return session.rename(title)
 **部署时踩到的坑（本轮新增）**：本机三个 profile 各有一份**拷贝**（不是 `link:`）：`main` 0.2.0、`desktop` 0.2.0、`web` 0.1.2。桌面 App 实际跑的是 **`desktop`** profile（判据：该 profile 装了本会话可见的 `dsh-zotero` / `dsh-zl-rental`，而 `main` 没有 zotero）。第一次只覆盖了 `main`，现象完全不变；覆盖 `desktop` 后才生效。→ **改完代码要按「运行中的那个 profile」部署，别按记忆里的 profile。**
 
 **版本自适应结论（0.2.1-rc.2 vs 0.2.1-alpha.4 逐包 diff，GitHub tag 源码）**：`packages/api/session-controller`、`packages/api/gateway`、`packages/api/remotes` 除 `package.json` 版本号外**无代码差异**；本插件用到的客户端 API 形状不变。新增的官方 `dsh-session-title` / `dsh-experimental-session-titles-bundle` 是**标题 provider**，与本插件「不注册 provider、只在用户点击时显式生成」的路线不冲突。
+
+### A8 生成失败的 Host 侧原因：模型已删、端点强制推理（2026-10-19，开发分支）
+
+两个报错都落在 `title.js` 的调用链上：路由校验漏了 model 维度（A8.1），调用参数让端点整单拒收（A8.2）。写回失败（`reading 'remote'`）见上文 A7，已随 0.2.1 发布。
+
+#### A8.1 已删模型：`pi-ai provider "openrouter" has no configured model "stealth/space-bunny-alpha"`
+
+**现象**：在换过模型、或模型已被删掉的会话里点「生成标题」→ `生成失败：pi-ai provider "openrouter" has no configured model "stealth/space-bunny-alpha"`。
+
+**根因**：A2/A5 的路由校验只问「这个 provider 的 adapter 还在不在」，不问「这个 model id 还在不在」。`stealth/space-bunny-alpha` 已从 profile 删掉，但 `openrouter` 还在，于是旧校验放行、候选被派发下去，pi-ai 的 `modelOf()` 抛 `UNKNOWN_MODEL`（`dsh-llm-pi-ai/lib/index.js:1875`）。
+
+**修正**：
+
+1. 每个候选再过一次 `ctx.llm.resolveModelInfo(provider, model)`——它先查 adapter 注册（`NO_ADAPTER`），再让 adapter 解析模型 id（pi-ai 抛 `UNKNOWN_MODEL`）；
+2. 只有 `UNKNOWN_MODEL` / `NO_ADAPTER` 算「路由已失效」并继续回退；其它错误（例如 `MISSING_CREDENTIAL`）不当作失效——那不是路由的错，让真正的调用去报；
+3. 全灭时按第一个被拒候选的原因分成 `no-model`（provider 在、模型没了）与 `no-adapter`，两者都带 `route`；客户端新增 `noModel` 文案，别把英文原话丢给用户；
+4. 宿主没有 `resolveModelInfo` 时跳过这层过滤（能力探测优先，绝不把本来能成功的调用弄失败）。
+
+#### A8.2 强制推理端点：`400 Reasoning is mandatory for this endpoint and cannot be disabled`
+
+**现象**：用 openrouter 的 `openai/gpt-oss-20b` 的会话点「生成标题」→ `生成失败：400: {"message":"Reasoning is mandatory for this endpoint and cannot be disabled.","code":400,"metadata":{"provider_name":null}}`。
+
+**根因（三段，缺一不成）**：
+
+1. **端点侧**：OpenRouter 上的 `openai/gpt-oss-20b` 把推理改为强制，任何「关闭推理」的请求都被拒（`400 Reasoning is mandatory for this endpoint and cannot be disabled`）。
+2. **宿主侧把「关不掉」编译成了「可以关」**：profile 声明 `reasoningEfforts: { 'off': null, high: high, max: max }`，本意是「off 档位不可用」。但 `dsh-llm-pi-ai/lib/index.js` 的 `resolveModelReasoning()`（:598-607）编译 pi-ai 的 `thinkingLevelMap` 时是
+
+   ```js
+   for (const level of THINKING_LEVELS) {
+     const wire = efforts[level]
+     if (wire === void 0) map[level] = null      // 没声明 → null（不支持）
+     else if (wire !== null) map[level] = wire   // 声明了 → 线的值
+   }                                             // 声明为 null → 键「缺失」
+   ```
+
+   声明为 `null` 的档位既不写 `null`（不支持）也不写值，键就**缺失**。pi-ai 的 `getSupportedThinkingLevels()`（同文件 :771-779）只把**值为 `null`** 的档位剔除，键缺失被读作「支持、发送时省略该参数」；于是 `off` 仍被报为可用，`reasoningInfo()` 给出的 efforts 里带着 `{ id: 'off' }`。
+3. **调用侧显式发了「关闭」**：不传 `reasoningEffort` 时，pi-ai 的 `openai-completions.js:682-692`（openrouter 格式）走
+
+   ```js
+   if (options?.reasoningEffort) openRouterParams.reasoning = { effort: map?.[options.reasoningEffort] ?? options.reasoningEffort }
+   else if (model.thinkingLevelMap?.off !== null) openRouterParams.reasoning = { effort: model.thinkingLevelMap?.off ?? 'none' }
+   ```
+
+   键缺失 → `map.off` 为 `undefined` → `!== null` 成立 → `?? 'none'` → 发 `{ effort: 'none' }` → 400。通用协议的同一逻辑在 :677-679（`:670-681` 分支）。
+
+**为什么不能提前判定（第一版补丁失效的原因）**：`resolveModelInfo()` 对「容忍省略推理」与「强制推理」的端点返回**同一个形状**——两者 efforts 里都含 `off`，宿主没有信息能区分。第一版补丁按「efforts 含 `off` 就不传档位」处理，于是又撞回 400。这不是安装没生效（补丁版 `title.js` 24250 B 确实在 profile 里），是判断依据本身不可靠。
+
+**修正（最终形态：被拒一次再带档位重试）**：
+
+1. `titleReasoningEffort(info)` 只负责**能提前识别**的形状：无 `info.reasoning` → 不传（宿主自己决定）；efforts 含 `off` → 不传（对容忍省略的端点保持最省路径、零额外往返）；否则取 `defaultEffort`，没有就取第一个档位；
+2. 调用失败后由 `isForcedReasoningFailure(failure)` 认端点原文（`/reasoning is (?:mandatory|required)|reasoning…cannot be disabled/i`），命中且本次没指定档位时，用 `forcedReasoningEffort(info)`（`defaultEffort`，否则第一个非 `off` 档位）**重试一次**，并把预算放宽到 `POLICY.maxReasoningOutputTokens = 2048`（思考会吃掉 256 的绝大部分，标题还没开始写就撞 `max-tokens`）；
+3. 只重试一次：该路由只剩 `off`、重试仍被拒、或失败文本与推理无关时都按原失败上报（不循环、不误伤 `500` 之类）；
+4. 实现点：`proposeTitle()` 内新增 `attempt(effort)` 闭包（一次调用的完整失败翻译：timeout / abort / TitlerError / `NO_ADAPTER` / 通用 `llm-error`），重试共享同一个 `AbortSignal.timeout(POLICY.timeoutMs)`；`titleReasoningEffort()` / `forcedReasoningEffort()` / `isForcedReasoningFailure()` 都留在模块内（经 `proposeTitle()` 的重试路径被单测覆盖），不对外导出，避免长出无人使用的 API 面。
+
+#### A8.3 验证
+
+- 单测从 19 条增到 **31 条**（`test/title.test.js` 新增 12 条：模型已删除时回退、全灭报 `no-model`（含 `status` 与 `details.route`）、`MISSING_CREDENTIAL` 不触发过滤、探测方法必须带接收者调用（A8.4）、强制推理端点带档位且预算 2048、`defaultEffort` 优先于最省档位、`efforts` 含 `off` 时不传 `reasoningEffort`，以及重试链路 5 条：看着可关推理但被端点 400 拒 → 第二次带档位且预算 2048、重试档位优先 `defaultEffort`、只剩 `off` 时只发一次、二次仍拒不再重试、无关失败（`500`）不重试）。`npm test` = `node --test`，无网络、无依赖。
+- README 同步：数据流图的候选校验、错误码表新增 `no-model`、POLICY 表新增 `maxReasoningOutputTokens`、失败契约的 `route` 字段、已知限制里的输出预算。
+
+#### A8.4 二次修复：模型探测必须带接收者调用
+
+**现象**：A8.1 的补丁已经装进 profile、dsh web 也重启过（进程启动时间晚于文件时间），但已删模型的会话仍报 `生成失败：pi-ai provider "openrouter" has no configured model "stealth/space-bunny-alpha"`——回退完全没发生。
+
+**取证**：直接对运行中的 3080 端口 `POST /session-titler/propose {"sessionId":"session-…"}`（活会话，header 记录 `openrouter` + `stealth/space-bunny-alpha`）→ `502` + `{"ok":false,"error":{"code":"llm-error","message":"pi-ai provider \"openrouter\" has no configured model \"stealth/space-bunny-alpha\""}}`。即进程里跑的确实是补丁版，但候选**没有被过滤掉**。
+
+**根因**：`pickRoute()` 里写着
+
+```js
+const resolve = ctx.llm?.resolveModelInfo   // 方法被摘出来
+try { … await resolve(route.provider, route.model) } catch (error) { … }
+```
+
+`LlmRuntime.resolveModelInfo()`（`dsh-llm/lib/index.js:2111-2112`）第一行就是 `this.resolveModelInfoFor(this.registration(provider), …)`——裸调时 `this` 是 `undefined`，抛的是 `TypeError: Cannot read properties of undefined (reading 'resolveModelInfoFor')`（先取 `this.resolveModelInfoFor` 再求参数，所以报的是这个方法名）——没有 `.code`。catch 把「没有 `code`」当作「不是路由的错」放行候选，于是派发到早已不存在的模型，pi-ai 再抛 `UNKNOWN_MODEL` 的原始文案。判别方式与 A7.1 同源：**带接收者 → `UNKNOWN_MODEL`；摘出裸调 → `reading '…'` 的 TypeError**。
+
+**修正**：`const llm = ctx.llm; if (llm === undefined || typeof llm.resolveModelInfo !== 'function') … ; await llm.resolveModelInfo(provider, model)`——能力探测仍在，但调用始终经过服务对象。回归测试用「读 `this.lookup` 的服务方法」当探针（`context({ serviceModels })`）：摘出裸调必抛 TypeError，测试立刻失败。
+
+**教训**：这条规则适用于本插件用到的每个宿主方法（`rename` 已在 A7.1 栽过一次）。凡是 `this` 依赖的服务方法，一律以 `owner.method(...)` 形式调用，不做方法提取。

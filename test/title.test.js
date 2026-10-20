@@ -54,6 +54,11 @@ function recordingStream(calls) {
  * makes the probe throw, which must degrade to "no filtering".
  * @param {object} [options.defaultSelection] - `agentDefaultModel` selection.
  * @param {Function} [options.stream] - `ctx.llm.stream` implementation.
+ * @param {Function} [options.resolveModelInfo] - `ctx.llm.resolveModelInfo`; absent
+ * in the doubles of a host that cannot describe a model before dispatching.
+ * @param {object} [options.serviceModels] - model facts reached by a probe that
+ * is a real method on the llm service: it reads `this.lookup`, so a caller that
+ * detaches it throws instead of answering.
  */
 function context({
   live,
@@ -62,23 +67,96 @@ function context({
   providers = ['deepseek-official'],
   defaultSelection = DEFAULT_SELECTION,
   stream = titleStream,
+  resolveModelInfo,
+  serviceModels,
 } = {}) {
+  const llm = {
+    listProviders:
+      providers === null
+        ? () => {
+            throw new Error('llm registry unavailable')
+          }
+        : () => providers.map((id) => ({ id })),
+    stream,
+  }
+  if (resolveModelInfo !== undefined) llm.resolveModelInfo = resolveModelInfo
+  if (serviceModels !== undefined) {
+    // The shape of the shipped `LlmRuntime.resolveModelInfo`: a method that
+    // reads `this`, so `const probe = llm.resolveModelInfo; probe(...)` throws
+    // a TypeError before any lookup — which a caller must not mistake for an
+    // unrelated capability failure.
+    llm.lookup = modelProbe(serviceModels)
+    llm.resolveModelInfo = function probe(provider, model) {
+      return this.lookup(provider, model)
+    }
+  }
   return {
     sessions: { get: () => live },
     sessionQuery: {
       readSurface: async () => ({ events: surfaceEvents }),
       readSession: async () => ({ events }),
     },
-    llm: {
-      listProviders:
-        providers === null
-          ? () => {
-              throw new Error('llm registry unavailable')
-            }
-          : () => providers.map((id) => ({ id })),
-      stream,
-    },
+    llm,
     get: (key) => (key === 'agentDefaultModel' ? { currentSelection: () => defaultSelection } : undefined),
+  }
+}
+
+/** A `resolveModelInfo` double: listed routes answer their facts, the rest are gone. */
+function modelProbe(facts) {
+  return async (provider, model) => {
+    const fact = facts[`${provider}/${model}`]
+    if (fact === undefined || typeof fact.code === 'string') {
+      throw Object.assign(new Error(`no configured model "${model}"`), {
+        code: fact === undefined ? 'UNKNOWN_MODEL' : fact.code,
+      })
+    }
+    return fact
+  }
+}
+
+/** The refusal an endpoint with mandatory reasoning answers a reasoning-off call. */
+const FORCED_REASONING_FAILURE = {
+  kind: 'error',
+  failure: {
+    code: 'INVALID_REQUEST',
+    message:
+      '400: {"message":"Reasoning is mandatory for this endpoint and cannot be disabled.","code":400,"metadata":{"provider_name":null}}',
+  },
+}
+
+/**
+ * A model stream that refuses a call without a named effort, then answers.
+ *
+ * This is the shape a profile declaring `reasoningEfforts: { off: null }`
+ * takes: the adapter drops the mapping, the level reads back as supported, and
+ * only the endpoint itself says otherwise.
+ */
+function forcedReasoningStream(calls) {
+  return async function* stream(options) {
+    calls.push(options)
+    if (options.reasoningEffort === undefined) {
+      yield { type: 'finish', reason: FORCED_REASONING_FAILURE }
+      return
+    }
+    yield { type: 'text-delta', text: 'A generated title' }
+    yield { type: 'finish', reason: { kind: 'stop' } }
+  }
+}
+
+/** A model stream that refuses every call. */
+function alwaysForcedStream(calls) {
+  return async function* stream(options) {
+    calls.push(options)
+    yield { type: 'finish', reason: FORCED_REASONING_FAILURE }
+  }
+}
+
+/** A model stream that records the complete request options before answering. */
+function optionsStream(calls) {
+  return async function* stream(options) {
+    calls.push(options)
+    yield { type: 'text-delta', text: 'A generated title' }
+    yield { type: 'finish', reason: { kind: 'stop' } }
   }
 }
 
@@ -194,6 +272,182 @@ test('proposeTitle maps a stream NO_ADAPTER finish to the actionable code', asyn
     assert.deepEqual(error.details, { route: 'opencode-go-new/deepseek-v4.1-flash' })
     return true
   })
+})
+
+test('a live session whose recorded model is gone falls back to the default model', async () => {
+  const gone = { provider: 'openrouter', model: 'stealth/space-bunny-alpha' }
+  const ctx = context({
+    live: { requestHeader: () => ({ config: { ...gone } }) },
+    providers: ['openrouter', 'deepseek-official'],
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': { provider: 'deepseek-official', id: 'deepseek-flash', name: 'Flash' },
+      'openrouter/stealth/space-bunny-alpha': { code: 'UNKNOWN_MODEL' },
+    }),
+  })
+  assert.deepEqual(await resolveRoute(ctx, 'session-1'), DEFAULT_SELECTION)
+})
+
+test('proposeTitle names the vanished model when no candidate survives', async () => {
+  const gone = { provider: 'openrouter', model: 'stealth/space-bunny-alpha' }
+  const ctx = context({
+    live: { requestHeader: () => ({ config: { ...gone } }) },
+    providers: ['openrouter', 'also-gone'],
+    defaultSelection: { provider: 'also-gone', model: 'someone-elses-flash' },
+    resolveModelInfo: modelProbe({}),
+  })
+  await assert.rejects(proposeTitle(ctx, 'session-1'), (error) => {
+    assert.ok(error instanceof TitlerError)
+    assert.equal(error.code, 'no-model')
+    assert.equal(error.status, 502)
+    assert.deepEqual(error.details, { route: 'openrouter/stealth/space-bunny-alpha' })
+    return true
+  })
+})
+
+test('the model probe is called through its owner service', async () => {
+  const gone = { provider: 'openrouter', model: 'stealth/space-bunny-alpha' }
+  const ctx = context({
+    live: { requestHeader: () => ({ config: { ...gone } }) },
+    providers: ['openrouter', 'deepseek-official'],
+    serviceModels: {
+      'deepseek-official/deepseek-flash': { provider: 'deepseek-official', id: 'deepseek-flash', name: 'Flash' },
+      'openrouter/stealth/space-bunny-alpha': { code: 'UNKNOWN_MODEL' },
+    },
+  })
+  assert.deepEqual(await resolveRoute(ctx, 'session-1'), DEFAULT_SELECTION)
+})
+
+test('an unrelated capability failure keeps the recorded route', async () => {
+  const ctx = context({
+    live: { requestHeader: () => ({ config: { ...DEAD_ROUTE } }) },
+    providers: ['opencode-go-new'],
+    resolveModelInfo: modelProbe({ 'opencode-go-new/deepseek-v4.1-flash': { code: 'MISSING_CREDENTIAL' } }),
+  })
+  assert.deepEqual(await resolveRoute(ctx, 'session-1'), DEAD_ROUTE)
+})
+
+test('a mandatory-reasoning route is asked with the cheapest effort and more room', async () => {
+  const calls = []
+  const ctx = context({
+    stream: optionsStream(calls),
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': { reasoning: { efforts: [{ id: 'high' }, { id: 'max' }] } },
+    }),
+  })
+  await proposeTitle(ctx, 'session-1')
+  assert.equal(calls[0].reasoningEffort, 'high')
+  assert.equal(calls[0].maxTokens, 2_048)
+})
+
+test('the route default effort wins over the cheapest one', async () => {
+  const calls = []
+  const ctx = context({
+    stream: optionsStream(calls),
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': {
+        reasoning: { efforts: [{ id: 'low' }, { id: 'high' }], defaultEffort: 'high' },
+      },
+    }),
+  })
+  await proposeTitle(ctx, 'session-1')
+  assert.equal(calls[0].reasoningEffort, 'high')
+})
+
+test('a route that may turn reasoning off keeps the plain budget', async () => {
+  const calls = []
+  const ctx = context({
+    stream: optionsStream(calls),
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': { reasoning: { efforts: [{ id: 'off' }, { id: 'high' }] } },
+    }),
+  })
+  await proposeTitle(ctx, 'session-1')
+  assert.equal('reasoningEffort' in calls[0], false)
+  assert.equal(calls[0].maxTokens, 256)
+})
+
+test('a route that only looks reasoning-optional is retried with a named effort', async () => {
+  const calls = []
+  const ctx = context({
+    stream: forcedReasoningStream(calls),
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': {
+        reasoning: { efforts: [{ id: 'off' }, { id: 'high' }, { id: 'max' }] },
+      },
+    }),
+  })
+  const proposal = await proposeTitle(ctx, 'session-1')
+  assert.equal(proposal.title, 'A generated title')
+  assert.equal(calls.length, 2)
+  assert.equal('reasoningEffort' in calls[0], false)
+  assert.equal(calls[0].maxTokens, 256)
+  assert.equal(calls[1].reasoningEffort, 'high')
+  assert.equal(calls[1].maxTokens, 2_048)
+})
+
+test('the retried effort prefers the route default over the cheapest level', async () => {
+  const calls = []
+  const ctx = context({
+    stream: forcedReasoningStream(calls),
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': {
+        reasoning: { efforts: [{ id: 'off' }, { id: 'low' }, { id: 'high' }], defaultEffort: 'high' },
+      },
+    }),
+  })
+  await proposeTitle(ctx, 'session-1')
+  assert.equal(calls[1].reasoningEffort, 'high')
+})
+
+test('a refused route with nothing but off is reported instead of retried', async () => {
+  const calls = []
+  const ctx = context({
+    stream: forcedReasoningStream(calls),
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': { reasoning: { efforts: [{ id: 'off' }] } },
+    }),
+  })
+  await assert.rejects(proposeTitle(ctx, 'session-1'), (error) => {
+    assert.equal(error.code, 'llm-error')
+    assert.equal(error.status, 502)
+    assert.match(error.message, /Reasoning is mandatory/)
+    return true
+  })
+  assert.equal(calls.length, 1)
+})
+
+test('a second refusal is reported rather than retried again', async () => {
+  const calls = []
+  const ctx = context({
+    stream: alwaysForcedStream(calls),
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': { reasoning: { efforts: [{ id: 'off' }, { id: 'high' }] } },
+    }),
+  })
+  await assert.rejects(proposeTitle(ctx, 'session-1'), (error) => {
+    assert.match(error.message, /Reasoning is mandatory/)
+    return true
+  })
+  assert.equal(calls.length, 2)
+})
+
+test('an unrelated stream failure is not retried', async () => {
+  const calls = []
+  const ctx = context({
+    stream: async function* stream(options) {
+      calls.push(options)
+      yield { type: 'finish', reason: { kind: 'error', failure: { code: 'SERVER', message: '500: upstream failed' } } }
+    },
+    resolveModelInfo: modelProbe({
+      'deepseek-official/deepseek-flash': { reasoning: { efforts: [{ id: 'off' }, { id: 'high' }] } },
+    }),
+  })
+  await assert.rejects(proposeTitle(ctx, 'session-1'), (error) => {
+    assert.equal(error.code, 'llm-error')
+    assert.match(error.message, /500: upstream failed/)
+    return true
+  })
+  assert.equal(calls.length, 1)
 })
 
 test('a session with nothing to summarize still reports no-content', async () => {
