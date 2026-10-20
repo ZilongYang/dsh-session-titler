@@ -161,7 +161,7 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 - 本仓库以 `link:` 方式挂进 profile，所以**改代码不用重装**。
 - **Client 半**（`client.js`）：刷新页面生效；插件刚装好时 Host 会推送模块图变更，通常无需刷新就会激活。
 - **Host 半**（`index.js` / `title.js` / `fence.js`）：**必须重启 DSH**。宿主进程内的 ESM 模块缓存不会因装卸载而失效——这是本插件开发中真实踩到的：改完 `title.js` 后路由行为不变，重启后才生效。
-- **单测**：`npm test`（= `node --test`，Node ≥ 20.3）。共 30 条：`test/title.test.js` 覆盖路由候选的 adapter + 模型校验（模型已删除时回退、全灭报 `no-model`、非路由性探测失败不过滤）、强制推理端点的档位与预算（含「看着能关推理、实际被端点拒绝」的一次重试；只剩 `off` 时不重试、二次仍拒不再重试、无关失败不重试）、失败映射与调用降级（只有 `prepareCall` / 两者都无）；`test/host.test.js` 覆盖挂载幂等（重复挂载不抛、最新 handler 生效、旧 fiber 不误删新路由、无关注册错误仍上抛、双挂载后路由仍能返回提案）。不联网、不装依赖。`test/` 不在 npm 包的 `files` 里。
+- **单测**：`npm test`（= `node --test`，Node ≥ 20.3）。共 31 条：`test/title.test.js` 覆盖路由候选的 adapter + 模型校验（模型已删除时回退、全灭报 `no-model`、非路由性探测失败不过滤、探测方法必须带接收者调用）、强制推理端点的档位与预算（含「看着能关推理、实际被端点拒绝」的一次重试；只剩 `off` 时不重试、二次仍拒不再重试、无关失败不重试）、失败映射与调用降级（只有 `prepareCall` / 两者都无）；`test/host.test.js` 覆盖挂载幂等（重复挂载不抛、最新 handler 生效、旧 fiber 不误删新路由、无关注册错误仍上抛、双挂载后路由仍能返回提案）。不联网、不装依赖。`test/` 不在 npm 包的 `files` 里。
 
 
 ## 支持的 DSH 版本与兼容声明
