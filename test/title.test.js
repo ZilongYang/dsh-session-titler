@@ -56,6 +56,9 @@ function recordingStream(calls) {
  * @param {Function} [options.stream] - `ctx.llm.stream` implementation.
  * @param {Function} [options.resolveModelInfo] - `ctx.llm.resolveModelInfo`; absent
  * in the doubles of a host that cannot describe a model before dispatching.
+ * @param {object} [options.serviceModels] - model facts reached by a probe that
+ * is a real method on the llm service: it reads `this.lookup`, so a caller that
+ * detaches it throws instead of answering.
  */
 function context({
   live,
@@ -65,6 +68,7 @@ function context({
   defaultSelection = DEFAULT_SELECTION,
   stream = titleStream,
   resolveModelInfo,
+  serviceModels,
 } = {}) {
   const llm = {
     listProviders:
@@ -76,6 +80,16 @@ function context({
     stream,
   }
   if (resolveModelInfo !== undefined) llm.resolveModelInfo = resolveModelInfo
+  if (serviceModels !== undefined) {
+    // The shape of the shipped `LlmRuntime.resolveModelInfo`: a method that
+    // reads `this`, so `const probe = llm.resolveModelInfo; probe(...)` throws
+    // a TypeError before any lookup — which a caller must not mistake for an
+    // unrelated capability failure.
+    llm.lookup = modelProbe(serviceModels)
+    llm.resolveModelInfo = function probe(provider, model) {
+      return this.lookup(provider, model)
+    }
+  }
   return {
     sessions: { get: () => live },
     sessionQuery: {
@@ -288,6 +302,19 @@ test('proposeTitle names the vanished model when no candidate survives', async (
     assert.deepEqual(error.details, { route: 'openrouter/stealth/space-bunny-alpha' })
     return true
   })
+})
+
+test('the model probe is called through its owner service', async () => {
+  const gone = { provider: 'openrouter', model: 'stealth/space-bunny-alpha' }
+  const ctx = context({
+    live: { requestHeader: () => ({ config: { ...gone } }) },
+    providers: ['openrouter', 'deepseek-official'],
+    serviceModels: {
+      'deepseek-official/deepseek-flash': { provider: 'deepseek-official', id: 'deepseek-flash', name: 'Flash' },
+      'openrouter/stealth/space-bunny-alpha': { code: 'UNKNOWN_MODEL' },
+    },
+  })
+  assert.deepEqual(await resolveRoute(ctx, 'session-1'), DEFAULT_SELECTION)
 })
 
 test('an unrelated capability failure keeps the recorded route', async () => {
