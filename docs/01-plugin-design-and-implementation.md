@@ -499,5 +499,24 @@ return session.rename(title)
 
 #### A8.3 验证
 
-- 单测从 19 条增到 **30 条**（`test/title.test.js` 新增 11 条：模型已删除时回退、全灭报 `no-model`（含 `status` 与 `details.route`）、`MISSING_CREDENTIAL` 不触发过滤、强制推理端点带档位且预算 2048、`defaultEffort` 优先于最省档位、`efforts` 含 `off` 时不传 `reasoningEffort`，以及重试链路 5 条：看着可关推理但被端点 400 拒 → 第二次带档位且预算 2048、重试档位优先 `defaultEffort`、只剩 `off` 时只发一次、二次仍拒不再重试、无关失败（`500`）不重试）。`npm test` = `node --test`，无网络、无依赖。
+- 单测从 19 条增到 **31 条**（`test/title.test.js` 新增 12 条：模型已删除时回退、全灭报 `no-model`（含 `status` 与 `details.route`）、`MISSING_CREDENTIAL` 不触发过滤、探测方法必须带接收者调用（A8.4）、强制推理端点带档位且预算 2048、`defaultEffort` 优先于最省档位、`efforts` 含 `off` 时不传 `reasoningEffort`，以及重试链路 5 条：看着可关推理但被端点 400 拒 → 第二次带档位且预算 2048、重试档位优先 `defaultEffort`、只剩 `off` 时只发一次、二次仍拒不再重试、无关失败（`500`）不重试）。`npm test` = `node --test`，无网络、无依赖。
 - README 同步：数据流图的候选校验、错误码表新增 `no-model`、POLICY 表新增 `maxReasoningOutputTokens`、失败契约的 `route` 字段、已知限制里的输出预算。
+
+#### A8.4 二次修复：模型探测必须带接收者调用
+
+**现象**：A8.1 的补丁已经装进 profile、dsh web 也重启过（进程启动时间晚于文件时间），但已删模型的会话仍报 `生成失败：pi-ai provider "openrouter" has no configured model "stealth/space-bunny-alpha"`——回退完全没发生。
+
+**取证**：直接对运行中的 3080 端口 `POST /session-titler/propose {"sessionId":"session-…"}`（活会话，header 记录 `openrouter` + `stealth/space-bunny-alpha`）→ `502` + `{"ok":false,"error":{"code":"llm-error","message":"pi-ai provider \"openrouter\" has no configured model \"stealth/space-bunny-alpha\""}}`。即进程里跑的确实是补丁版，但候选**没有被过滤掉**。
+
+**根因**：`pickRoute()` 里写着
+
+```js
+const resolve = ctx.llm?.resolveModelInfo   // 方法被摘出来
+try { … await resolve(route.provider, route.model) } catch (error) { … }
+```
+
+`LlmRuntime.resolveModelInfo()`（`dsh-llm/lib/index.js:2111-2112`）第一行就是 `this.resolveModelInfoFor(this.registration(provider), …)`——裸调时 `this` 是 `undefined`，抛的是 `TypeError: Cannot read properties of undefined (reading 'registration')`，没有 `.code`。catch 把「没有 `code`」当作「不是路由的错」放行候选，于是派发到早已不存在的模型，pi-ai 再抛 `UNKNOWN_MODEL` 的原始文案。判别方式与 A7.1 同源：**带接收者 → `UNKNOWN_MODEL`；摘出裸调 → `reading '…'` 的 TypeError**。
+
+**修正**：`const llm = ctx.llm; if (llm === undefined || typeof llm.resolveModelInfo !== 'function') … ; await llm.resolveModelInfo(provider, model)`——能力探测仍在，但调用始终经过服务对象。回归测试用「读 `this.lookup` 的服务方法」当探针（`context({ serviceModels })`）：摘出裸调必抛 TypeError，测试立刻失败。
+
+**教训**：这条规则适用于本插件用到的每个宿主方法（`rename` 已在 A7.1 栽过一次）。凡是 `this` 依赖的服务方法，一律以 `owner.method(...)` 形式调用，不做方法提取。
