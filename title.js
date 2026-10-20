@@ -386,16 +386,6 @@ function noAdapterOn(route) {
   )
 }
 
-/** One failure for a route whose provider is mounted but whose model is gone. */
-function noModelOn(route) {
-  return new TitlerError(
-    'no-model',
-    502,
-    `provider "${route.provider}" is mounted but configures no model "${route.model}", and the deployment default model does not help either`,
-    { route: `${route.provider}/${route.model}` },
-  )
-}
-
 /**
  * One actionable failure for a session no route candidate can be dispatched
  * for; the first rejected candidate says which half of the route went stale.
@@ -436,13 +426,10 @@ function noRouteError(rejected) {
  * real level — the route's own default, else the cheapest one it offers —
  * keeps such a session usable.
  */
-export function titleReasoningEffort(info) {
-  const reasoning = info?.reasoning
-  if (reasoning === undefined) return undefined
-  const efforts = Array.isArray(reasoning.efforts) ? reasoning.efforts : []
+function titleReasoningEffort(info) {
+  const efforts = Array.isArray(info?.reasoning?.efforts) ? info.reasoning.efforts : []
   if (efforts.some((effort) => effort?.id === 'off')) return undefined
-  const cheapest = efforts.find((effort) => typeof effort?.id === 'string')
-  return reasoning.defaultEffort ?? cheapest?.id
+  return forcedReasoningEffort(info)
 }
 
 /**
@@ -454,7 +441,7 @@ export function titleReasoningEffort(info) {
  * recording a refusal), so this is decided from the failure, not up front: the
  * route's own default effort is preferred, else the cheapest level it offers.
  */
-export function forcedReasoningEffort(info) {
+function forcedReasoningEffort(info) {
   const reasoning = info?.reasoning
   if (reasoning === undefined) return undefined
   const efforts = Array.isArray(reasoning.efforts) ? reasoning.efforts : []
@@ -465,7 +452,7 @@ export function forcedReasoningEffort(info) {
 }
 
 /** Whether one failure is an endpoint refusing to run without reasoning. */
-export function isForcedReasoningFailure(failure) {
+function isForcedReasoningFailure(failure) {
   const message = typeof failure?.message === 'string' ? failure.message : ''
   return /reasoning is (?:mandatory|required)|reasoning[^.]{0,40}cannot be disabled/i.test(message)
 }

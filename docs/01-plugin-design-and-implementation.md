@@ -495,7 +495,7 @@ return session.rename(title)
 1. `titleReasoningEffort(info)` 只负责**能提前识别**的形状：无 `info.reasoning` → 不传（宿主自己决定）；efforts 含 `off` → 不传（对容忍省略的端点保持最省路径、零额外往返）；否则取 `defaultEffort`，没有就取第一个档位；
 2. 调用失败后由 `isForcedReasoningFailure(failure)` 认端点原文（`/reasoning is (?:mandatory|required)|reasoning…cannot be disabled/i`），命中且本次没指定档位时，用 `forcedReasoningEffort(info)`（`defaultEffort`，否则第一个非 `off` 档位）**重试一次**，并把预算放宽到 `POLICY.maxReasoningOutputTokens = 2048`（思考会吃掉 256 的绝大部分，标题还没开始写就撞 `max-tokens`）；
 3. 只重试一次：该路由只剩 `off`、重试仍被拒、或失败文本与推理无关时都按原失败上报（不循环、不误伤 `500` 之类）；
-4. 实现点：`proposeTitle()` 内新增 `attempt(effort)` 闭包（一次调用的完整失败翻译：timeout / abort / TitlerError / `NO_ADAPTER` / 通用 `llm-error`），重试共享同一个 `AbortSignal.timeout(POLICY.timeoutMs)`；`forcedReasoningEffort()` 与 `isForcedReasoningFailure()` 一并导出以便单测。
+4. 实现点：`proposeTitle()` 内新增 `attempt(effort)` 闭包（一次调用的完整失败翻译：timeout / abort / TitlerError / `NO_ADAPTER` / 通用 `llm-error`），重试共享同一个 `AbortSignal.timeout(POLICY.timeoutMs)`；`titleReasoningEffort()` / `forcedReasoningEffort()` / `isForcedReasoningFailure()` 都留在模块内（经 `proposeTitle()` 的重试路径被单测覆盖），不对外导出，避免长出无人使用的 API 面。
 
 #### A8.3 验证
 
@@ -515,7 +515,7 @@ const resolve = ctx.llm?.resolveModelInfo   // 方法被摘出来
 try { … await resolve(route.provider, route.model) } catch (error) { … }
 ```
 
-`LlmRuntime.resolveModelInfo()`（`dsh-llm/lib/index.js:2111-2112`）第一行就是 `this.resolveModelInfoFor(this.registration(provider), …)`——裸调时 `this` 是 `undefined`，抛的是 `TypeError: Cannot read properties of undefined (reading 'registration')`，没有 `.code`。catch 把「没有 `code`」当作「不是路由的错」放行候选，于是派发到早已不存在的模型，pi-ai 再抛 `UNKNOWN_MODEL` 的原始文案。判别方式与 A7.1 同源：**带接收者 → `UNKNOWN_MODEL`；摘出裸调 → `reading '…'` 的 TypeError**。
+`LlmRuntime.resolveModelInfo()`（`dsh-llm/lib/index.js:2111-2112`）第一行就是 `this.resolveModelInfoFor(this.registration(provider), …)`——裸调时 `this` 是 `undefined`，抛的是 `TypeError: Cannot read properties of undefined (reading 'resolveModelInfoFor')`（先取 `this.resolveModelInfoFor` 再求参数，所以报的是这个方法名）——没有 `.code`。catch 把「没有 `code`」当作「不是路由的错」放行候选，于是派发到早已不存在的模型，pi-ai 再抛 `UNKNOWN_MODEL` 的原始文案。判别方式与 A7.1 同源：**带接收者 → `UNKNOWN_MODEL`；摘出裸调 → `reading '…'` 的 TypeError**。
 
 **修正**：`const llm = ctx.llm; if (llm === undefined || typeof llm.resolveModelInfo !== 'function') … ; await llm.resolveModelInfo(provider, model)`——能力探测仍在，但调用始终经过服务对象。回归测试用「读 `this.lookup` 的服务方法」当探针（`context({ serviceModels })`）：摘出裸调必抛 TypeError，测试立刻失败。
 
