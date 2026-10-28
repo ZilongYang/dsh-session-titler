@@ -1,5 +1,7 @@
 # dsh-session-titler
 
+> 官网 / Website: <https://dsh.zlmix.com/session-titler/>
+
 **Summarize a whole DeepSeek Harness session into one title on demand — confirm it before it is applied.** A Host + Web Client plugin: its only entries are a header button and a session-row menu item, and nothing is written until you press Confirm. It registers no title provider, so automatic titling keeps whatever else you have installed.
 
 把**整个会话**总结成一条新标题，**确认后**才写入。DeepSeek Harness 的 Host + Web Client 双半插件。
