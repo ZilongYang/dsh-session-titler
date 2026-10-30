@@ -159,6 +159,21 @@ $NPM view dsh-session-titler version repository dist.fileCount
 - 首次发 `0.1.0`；`repository` 必须已指向该仓库。
 - 本地 profile 的 `link:` 安装**不受影响**。
 
+### 阶段 D'：打 tag + 建 GitHub Release（0.2.2 起为常例；0.1.x–0.2.1 只有 npm 渠道，无 Release）
+
+版本端点转 200 后执行：
+
+```sh
+git tag -a v<版本> -m "dsh-session-titler <版本> — <一句话主题>" && git push origin v<版本>
+# tgz 先从 registry 直链下载，并用 dist.integrity 校验 sha512 一致后再上传：
+openssl dgst -sha512 -binary <tgz> | base64     # 与版本端点的 dist.integrity 逐字符比对
+gh release create v<版本> <tgz> --title "v<版本> — <主题>" --notes-file <说明文件>
+gh release view v<版本> --json assets -q '.assets[] | {name, size, digest}'   # 核对 size/digest
+```
+
+坑：工作目录里可能留着**发布前 CDN 未转正时下坏的同名 tgz**（例如 21 字节的错误文本），
+上传 Release 前务必先核 size/sha512，别把坏文件挂上去。
+
 ---
 
 ## 7. 阶段 E：提社区插件市场 PR
@@ -419,4 +434,5 @@ npm --cache /tmp/dsh-npm-cache publish
 - 成品审计：tarball **13 个文件**与白名单一致；`package/title.js` 含 `noRouteError`、`maxReasoningOutputTokens`，`package/client.js` 含 `noModel` 文案，`version: 0.2.2` —— 新逻辑确已在正式包里。
 - 本地自检：`node --check` 两半通过；`npm test` **31/31**（新增 12 条）；`pack --dry-run` 与白名单一致。
 - 社区市场**不需要**重新提 PR（列表按仓库自动收录）。
+- **GitHub Release（本版起新增渠道）**：tag `v0.2.2` + [Release 页面](https://github.com/ZilongYang/dsh-session-titler/releases/tag/v0.2.2)（中文说明 + tgz 资产，sha512 与 registry 逐字符一致）。首次上传误带了 CDN 未转正时的坏 tgz（21 字节），已删重传（55 824 B）。步骤已固化进「阶段 D'」；旧版本（0.1.x–0.2.1）按决定**不回溯** Release。
 

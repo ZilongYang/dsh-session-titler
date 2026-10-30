@@ -28,7 +28,7 @@
 - [x] `git push origin main`（d05f84d..d9f05ed）。
 - [x] `docs/02-open-source-and-marketplace.md` 补 0.2.2 发版记录。
 - [x] 社区市场**无需**重新提 PR（列表按仓库自动收录）。
-- [x] 成品审计：从 registry 直链拉 `dsh-session-titler-0.2.2.tgz` → **13 个文件**，`package/title.js` 含 `noRouteError` / `maxReasoningOutputTokens`，`package/client.js` 含 `noModel` 文案。
+- [x] 成品审计：从 registry 直链拉 `dsh-session-titler-0.2.2.tgz` → **13 个文件**，`package/title.js` 含 `noRouteError` / `maxReasoningOutputTokens`，`package/client.js` 含 `noModel` 文案（子龙 2026-10-30 要求补 GitHub Release 后：tag `v0.2.2` + [Release](https://github.com/ZilongYang/dsh-session-titler/releases/tag/v0.2.2) 已建，tgz 资产 sha512 与 registry 一致）。
 
 ## 4. 实机验收（desktop / main profile，DSH `0.2.1-rc.2`）
 
