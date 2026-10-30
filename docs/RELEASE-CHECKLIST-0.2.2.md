@@ -23,12 +23,12 @@
 
 ## 3. 发布
 
-- [ ] `npm --cache /tmp/dsh-npm-cache publish`（沙箱下默认 `~/.npm` 会被拒；2FA 见 `docs/02`「坑 1」）→ `+ dsh-session-titler@0.2.2`。
-- [ ] 判定以**版本端点**为准（`curl -s https://registry.npmjs.org/dsh-session-titler/0.2.2`）→ 关注 CDN 延迟（0.2.1 时约 4 分钟转 200；packument 约 10 分钟负缓存）。
-- [ ] `git push origin main`（发版提交）。
-- [ ] `docs/02-open-source-and-marketplace.md` 补 0.2.2 发版记录。
-- [ ] 社区市场**无需**重新提 PR（列表按仓库自动收录）。
-- [ ] 成品审计：从 registry 直链拉 `dsh-session-titler-0.2.2.tgz`，确认含 `title.js` 新路由逻辑与 `client.js` 的 `no-model` 文案。
+- [x] `npm --cache /tmp/dsh-npm-cache publish`（沙箱下默认 `~/.npm` 会被拒；2FA 见 `docs/02`「坑 1」）→ `+ dsh-session-titler@0.2.2`，未触发 OTP。
+- [x] 判定以**版本端点**为准（`curl -s https://registry.npmjs.org/dsh-session-titler/0.2.2`）→ **t+2 分钟转 200**（shasum 一致）；tarball 直链又滞后约 5 分钟（t+7 分钟转正），比 0.2.1 的 CDN 延迟更久。
+- [x] `git push origin main`（d05f84d..d9f05ed）。
+- [x] `docs/02-open-source-and-marketplace.md` 补 0.2.2 发版记录。
+- [x] 社区市场**无需**重新提 PR（列表按仓库自动收录）。
+- [x] 成品审计：从 registry 直链拉 `dsh-session-titler-0.2.2.tgz` → **13 个文件**，`package/title.js` 含 `noRouteError` / `maxReasoningOutputTokens`，`package/client.js` 含 `noModel` 文案。
 
 ## 4. 实机验收（desktop / main profile，DSH `0.2.1-rc.2`）
 

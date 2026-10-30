@@ -393,3 +393,30 @@ npm --cache /tmp/dsh-npm-cache publish
 - `npm pack @0.2.1` 一度仍报 `notarget`（本地 packument 缓存滞后），改用版本端点里的 `dist.tarball` 直链下载即可，属同一负缓存现象。
 
 **安装侧**：本机 `desktop` / `main` 两个 profile 是**拷贝安装**（非 `link:`），发版前已手动把两者的 `client.js` 覆盖为 0.2.1 版本以便验证；正式升级仍走市场页或 `dsh plugin --profile <p> add dsh-session-titler@0.2.1`。CDN 刷新前市场装到的仍是 0.2.0。
+
+### 0.2.2 发版记录（2026-10-30）
+
+**发版原因**：合入社区 PR [#2](https://github.com/ZilongYang/dsh-session-titler/pull/2)（作者 [@little3tar](https://github.com/little3tar)），修「生成标题」的两类 Host 侧失败——① 会话记录的模型已在 profile 删除时不回退默认模型（旧校验只查 adapter）；② 强制推理端点报 `400 Reasoning is mandatory`。根因与证据链见 `docs/01` 附录 **A8**。当天还答复了 issue #1（报告人的 `reading 'remote'` 症状实为 0.2.0 detached rename 调用，0.2.1 已修，等报告人复测后关闭）。
+
+**提交与推送**：
+
+```sh
+# PR #2 rebase 合并为 5 个提交（b968e58 … d05f84d，61b6348 之后）：
+#   fix/docs Fix 两条 × (强制推理重试 / 模型探测校验) + 收尾
+# d9f05ed chore(release): 0.2.2 — fix the deleted-model fallback and the mandatory-reasoning 400
+git push origin main                # d05f84d..d9f05ed
+```
+
+**发布**：
+
+```sh
+npm --cache /tmp/dsh-npm-cache publish
+```
+
+- 结果：`+ dsh-session-titler@0.2.2`，未触发 OTP。
+- 产物：**13 个文件**，`package size 55.8 kB / unpacked 149.2 kB`，shasum `e8eccacc…`，白名单与 0.2.1 相同（`test/` 不进包）。
+- 读接口滞后与 0.2.1「坑 2」一致：发布后立即 `npm view` 无新版、版本端点 404；**t+2 分钟** `GET /dsh-session-titler/0.2.2` → **200**（shasum 与本地 pack 一致）。tarball CDN 直链滞后更久：版本端点转 200 后仍 404 了约 **5 分钟**（t+7 分钟才转正，0.2.1 当时未见这层延迟），后转正。
+- 成品审计：tarball **13 个文件**与白名单一致；`package/title.js` 含 `noRouteError`、`maxReasoningOutputTokens`，`package/client.js` 含 `noModel` 文案，`version: 0.2.2` —— 新逻辑确已在正式包里。
+- 本地自检：`node --check` 两半通过；`npm test` **31/31**（新增 12 条）；`pack --dry-run` 与白名单一致。
+- 社区市场**不需要**重新提 PR（列表按仓库自动收录）。
+
