@@ -176,6 +176,8 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 
 > **0.2.1 修了什么**：0.2.0 为了给重命名路径加存在性判断，把 `binding.session.rename` 摘成变量再裸调用，严格模式下丢了 `this`，于是点「确认修改」必报 `Cannot read properties of undefined (reading 'remote')`。0.2.1 改回与官方「重命名」同形的**方法调用**（`session.rename(title)`）。完整证据链见 `docs/01` 附录 A7。
 
+> **0.2.2 修了什么**（社区 PR [#2](https://github.com/ZilongYang/dsh-session-titler/pull/2)，感谢 [@little3tar](https://github.com/little3tar)）：两类「生成标题」阶段的 Host 侧失败——① 会话记录的模型已在 profile 里被删（provider 还在但模型 id 没了），现在会回退默认模型，全灭时给新错误码 `no-model` 与可操作文案；② 端点**强制推理**（报 `400 Reasoning is mandatory for this endpoint and cannot be disabled`），现在先按模型档位直发，被拒后带档位重试一次（`maxReasoningOutputTokens` 2048）。详见 `docs/01` 附录 A8。
+
 `package.json` 里有两处声明，含义不同：
 
 - **`engines.dsh`**：`">=0.2.0-rc.1 <0.3.0-0"`。插件市场的装前检查读它（顶层 `engines.dsh` 或 `dsh.engines.dsh` 都读，前者优先），落在范围外会**拒绝安装并说明原因**，而不是装完再崩。
@@ -201,6 +203,7 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 - [`docs/PLAN-2026-10-16.md`](docs/PLAN-2026-10-16.md) —— 0.2.0 方案（修复 0.2.1-alpha.x 重复挂载崩溃 + 版本自适应），批准正文原样存档，文末有事后补记。
 - [`docs/RELEASE-CHECKLIST-0.2.0.md`](docs/RELEASE-CHECKLIST-0.2.0.md) —— 0.2.0 发版/验收打勾清单（含未完成的实机验收项）。
 - [`docs/RELEASE-CHECKLIST-0.2.1.md`](docs/RELEASE-CHECKLIST-0.2.1.md) —— 0.2.1 发版/验收打勾清单（修「确认修改」必崩，附录 A7）。
+- [`docs/RELEASE-CHECKLIST-0.2.2.md`](docs/RELEASE-CHECKLIST-0.2.2.md) —— 0.2.2 发版/验收打勾清单（修「已删模型不回退」与「强制推理端点 400」，附录 A8）。
 
 ## License
 
