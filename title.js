@@ -493,6 +493,12 @@ export function streamTitle(ctx, options) {
 /**
  * Fallback for a host that only exposes the prepared-call API.
  *
+ * `ctx.llm` is the `LlmRuntime` service, so the entry point is
+ * `prepareCall(config, signal?, configure?)`; the adapter-level
+ * `LlmAdapter.prepareCall(provider, model, signal?)` is a different method one
+ * layer below and must not be mistaken for it. The returned `PreparedLlmCall`
+ * carries `config` plus a registration-bound `stream(options)`.
+ *
  * The returned handle owns the adapter registration, so the prepared `config`
  * is spread into the stream options: the host rejects a call whose controls
  * drifted from the prepared ones.

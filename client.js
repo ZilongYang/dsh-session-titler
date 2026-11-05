@@ -2,9 +2,16 @@
  * Client half of dsh-session-titler.
  *
  * Registers three seats in the Web page:
- *   - a header action right of the cost chip   (`conversation.session.header.actions`, order 0)
- *   - a session-menu row under "Rename"        (`sidebar.workspaces.session.menu.item`, order 250)
- *   - the confirmation dialog                  (`shell.overlay`)
+ *   - a header action right of the preset chip (`conversation.session.header.actions`, order -8)
+ *   - a session-menu row                      (`sidebar.workspaces.session.menu.item`, order 250)
+ *   - the confirmation dialog                 (`shell.overlay`)
+ *
+ * DSH 0.2.2 moved the built-in session-menu actions to `ctx.contextMenus` and
+ * demoted this Slot to a legacy channel: external React entries still render,
+ * but as one block after the data actions and before `Archive`. So the row sits
+ * between Rename and Fork through 0.2.1, and between Copy session ID and
+ * Archive from 0.2.2 on. Function is unaffected — the Slot still receives the
+ * captured row identity and `useMenuOpenState`.
  *
  * Both entries open the same store; the dialog shows the host's proposal in an
  * editable field and only the explicit confirm calls the shipped rename path

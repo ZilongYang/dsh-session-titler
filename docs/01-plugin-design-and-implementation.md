@@ -520,3 +520,46 @@ try { … await resolve(route.provider, route.model) } catch (error) { … }
 **修正**：`const llm = ctx.llm; if (llm === undefined || typeof llm.resolveModelInfo !== 'function') … ; await llm.resolveModelInfo(provider, model)`——能力探测仍在，但调用始终经过服务对象。回归测试用「读 `this.lookup` 的服务方法」当探针（`context({ serviceModels })`）：摘出裸调必抛 TypeError，测试立刻失败。
 
 **教训**：这条规则适用于本插件用到的每个宿主方法（`rename` 已在 A7.1 栽过一次）。凡是 `this` 依赖的服务方法，一律以 `owner.method(...)` 形式调用，不做方法提取。
+
+### A9 DSH 0.2.2-rc.1 兼容核查与 0.2.3 文案对齐（2026-11-05）
+
+**背景**：DSH `0.2.2-rc.1`（2026-11-04 13:07 UTC）把内置的会话「…」菜单动作从 Slot 迁到新的 `ctx.contextMenus` 数据动作，`sidebar.workspaces.session.menu.item` 被明确降级为 **legacy 通道**。完整比对见 `docs/COMPAT-2026-11-05-dsh-0.2.2-rc.1.md`（另有 `~/docs/` 下的三插件总览）。
+
+**结论**：功能零破坏，唯一用户可见变化是会话菜单行位置；本插件 0.2.3 只做文案与兼容矩阵对齐，不动代码路径。
+
+#### A9.1 核查方法与范围
+
+- 源码级比对 `dsh-v0.2.1-rc.5` 与 `dsh-v0.2.2-rc.1` 两个 tag（**非运行时验证**）；逐条核对了 `packages/client/ui-conversation`、`ui-workspace`、`ui-layout`、`ui-context-menu`、`ui-slots`、`extensions/cordis-client-runner`、`packages/session*`、`packages/llm`、`packages/host/webserver`、`vendor/include`。
+- 逐份过了 `v0.2.2-alpha.2` 的 13 份 upgrade-guide：与本插件相关的只有 `context-menu-target`（`MenuTarget` → `ContextMenuTarget`、图标改 `{key, src?}`）与 `llm-request-purpose-declarations`（`GenerateOptions.purpose` 改为声明合并，`session-title` 不再由共享包声明；**纯类型层，运行时字符串含义不变，本插件是手写 JS，不受影响**），其余（forge、fs、schedule、projection、pi-ai、sdk、cordis-loader）均无关。
+- 本机环境：桌面 App 已是 `0.2.2-rc.1`（`desktop`/`main` profile 装插件 0.2.2），CLI `dsh` 是 `0.2.1-rc.5`（`web` profile 插件 0.2.1），新旧两版都能实机验证。
+
+#### A9.2 逐项结论
+
+| 依赖 | 0.2.2-rc.1 状态 |
+|---|---|
+| `ctx.sessions.using/retain/binding`、`SessionBinding`、`ISession.rename`、`SessionReferenceSource`（含 `workspaceOperation`） | 逐字未变，「确认后才写入」继续成立 |
+| `ctx.webServer.register`、重复路由文案模板 | 未变；插件 `/^webserver: duplicate (?:exact|prefix) route /` 继续有效 |
+| `ctx.sessionQuery.readSurface/readSession`、`ctx.llm.stream/resolveModelInfo/listProviders`、`reasoning.efforts`、`NO_ADAPTER`/`UNKNOWN_MODEL` | 均在，签名未变 |
+| `agentDefaultModel.currentSelection()`、`webRuntime.trustedHosts`、`live.requestHeader()/snapshotEvents()`、事件形状 | 均在，未变 |
+| `window.__ModuleLoader__.load({id, factory})`、`require('react')`、4 个 `dsh.client.inject` 包 | 未变；`require` 只新增 `asset()` |
+| `ui-slots` 源码 | 零改动（仅 package.json 版本） |
+| 会话菜单 Slot 组件 props（`sessionId`/`displayTitle`/`useMenuOpenState`） | 未变，`hookContext` 仍由 `menuOpenStateFactory` 绑定 |
+| 会话菜单行的**位置** | **变了**：0.2.1 在 Rename(200)/Fork(300) 之间；0.2.2 起内置动作是 `ctx.contextMenus` 条目，legacy Slot 整块排在 Copy session ID(450) 之后、Archive(600 + `afterContent`) 之前 |
+| `conversation.session.header.actions` | 保留；容器新增 `overflow: clip` + 渐隐，插件弹窗在 frame 级 `shell.overlay`，不受影响 |
+
+#### A9.3 两处容易误判的地方（留档）
+
+1. **`llm.prepareCall` 兜底不是 bug。** `ctx.llm` 是 `LlmRuntime`，服务签名 `prepareCall(config: LlmCallConfig, signal?, configure?) => Promise<PreparedLlmCall>`（`packages/llm/llm/src/index.ts`，类 `LlmRuntime`），返回对象带 `config` + 受注册绑定的 `stream(options)`；`LlmAdapter.prepareCall(provider, model, signal?) => PreparedAdapterCall` 是**再下一层适配器**的方法。`title.js` 的 `preparedTitleStream` 与 `test/title.test.js` 用的都是服务契约，正确。本次仅在 JSDoc 加了一句澄清注释，**代码零改动**。
+2. **0.2.2 没有「新增」顶栏占位者。** `agent-team(-20)` / `agent-preset(-10)` / `subagent-catalog(10)` / `job-list(20)` 在 `0.2.1-rc.5` 就已以相同 order 注册；它们不影响本插件 `-8` 的相对位置。
+
+#### A9.4 本版（0.2.3）改动
+
+- `package.json`：`0.2.2 → 0.2.3`；`dshReleases` 补齐 `0.2.1-rc.3/4/5`、`0.2.2-alpha.2/3`、`0.2.2-rc.1`（验收前 `unknown`，实机验收通过后 `0.2.2-rc.1 → compatible`）。
+- 文案：`client.js` 头注释、`README` 快速开始与入口表、`locale/{zh,en}.json` 的 `meta.description`，全部按「≤0.2.1 / ≥0.2.2」双版本描述。
+- 文档：`docs/PLAN-2026-11-05.md`、本附录、`docs/RELEASE-CHECKLIST-0.2.3.md`；README 兼容表新增 `0.2.2-rc.1` 行。
+- **未做**：迁移到 `ctx.contextMenus`（保住「紧跟重命名」）留作 0.3.0 独立改动，需双路径注册 + `dsh.client.inject` 新增包 + 客户端单测；6 种新语言包同样留作后续。
+
+#### A9.5 验证
+
+- `node --check`、`npm test` = **31 条全绿**（行为未变，未新增用例）、`npm pack --dry-run` = **13 个文件**。
+- 实机：桌面版 DSH `0.2.2-rc.1` 上确认菜单行位于「复制会话 ID」之后、「归档」之前，点开弹窗/取消不写/确认写入/空白置灰均正常；CLI `0.2.1-rc.5` 上回归 legacy 位置与「确认修改」路径。

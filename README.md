@@ -33,7 +33,7 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 
 1. 打开任意一个**已经有内容**的会话；
 2. 点标题栏里的 **✦ 生成标题** —— 它在「创造模式」右边、「费用 ¥0」左边；
-   或点左侧会话行 **「...」菜单 → 生成标题**（在「重命名」下面一行）；
+   或点左侧会话行 **「...」菜单 → 生成标题**（0.2.1 及更早紧接「重命名」下一行；DSH 0.2.2 起在「复制会话 ID」之后、「归档」之前）；
 3. 等 2–4 秒，弹窗给出标题提案，**可以直接改**；
 4. 点 **确认修改** —— 左侧标题立即更新，刷新页面也还在。
 
@@ -54,7 +54,7 @@ dsh plugin --profile <你的profile> remove dsh-session-titler
 | 入口 | 位置 |
 |---|---|
 | 顶栏按钮「✦ 生成标题」 | 会话标题栏里，`conversation.session.header.actions` 的 `order: -8` —— 紧跟「创造模式」芯片 `agent-preset`（`-10`）右侧，排在费用芯片 `cost-meter`（`-5`）之前，从而让 `费用 ¥0` 与 `费用明细`（`1`）保持相邻 |
-| 会话行菜单项「生成标题」 | 会话行「...」菜单 `sidebar.workspaces.session.menu.item` 的 `order: 250` —— 在「重命名」（`200`）下面一行、「分叉会话」（`300`）上面 |
+| 会话行菜单项「生成标题」 | 会话行「...」菜单 `sidebar.workspaces.session.menu.item` 的 `order: 250`。**DSH ≤ 0.2.1**：内置动作也是这个 Slot 的条目，本项在「重命名」（`200`）下面一行、「分叉会话」（`300`）上面；**DSH 0.2.2 起**：内置动作迁到 `ctx.contextMenus`，本 Slot 成为 legacy 通道，整块排在「复制会话 ID」（`450`）之后、「归档」（`600`，`afterContent`）之前 |
 
 点击后：生成 → 居中确认弹窗（标题**可编辑**，另有「重新生成 / 取消」）→ 点「确认修改」才真正改标题。取消、Esc、点遮罩都不会写任何数据。
 
@@ -172,11 +172,14 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 | `0.2.1-alpha.2` | 已验证可用 | 桌面版内置版本；逐包 diff 过插件用到的全部 API（见 `docs/01` 附录 A6），单测覆盖 |
 | `0.2.1-alpha.3` / `alpha.4` / `alpha.5` / `rc.1` | 未实测 | `alpha.4` 已从 npm 取源码 diff（插件可见 API 未变），但未实机跑过，故声明里标 `unknown` |
 | `0.2.1-rc.2` | 已验证可用 | 桌面版与 CLI 均为该版本；客户端 `session-controller`/`gateway` 逐包 diff 无代码差异，「确认修改」实机验证通过（见 `docs/01` 附录 A7） |
+| `0.2.2-rc.1` | 已验证可用 | 桌面版 DSH `0.2.2-rc.1` 实机验收通过：菜单行落在「复制会话 ID」之后、「归档」之前，弹窗/取消/确认写入均正常（见 `docs/RELEASE-CHECKLIST-0.2.3.md`）；源码级依据见 `docs/COMPAT-2026-11-05-dsh-0.2.2-rc.1.md` |
 | `< 0.2.0-rc.1` / `>= 0.3.0` | 不支持 | 声明范围之外 |
 
 > **0.2.1 修了什么**：0.2.0 为了给重命名路径加存在性判断，把 `binding.session.rename` 摘成变量再裸调用，严格模式下丢了 `this`，于是点「确认修改」必报 `Cannot read properties of undefined (reading 'remote')`。0.2.1 改回与官方「重命名」同形的**方法调用**（`session.rename(title)`）。完整证据链见 `docs/01` 附录 A7。
 
 > **0.2.2 修了什么**（社区 PR [#2](https://github.com/ZilongYang/dsh-session-titler/pull/2)，感谢 [@little3tar](https://github.com/little3tar)）：两类「生成标题」阶段的 Host 侧失败——① 会话记录的模型已在 profile 里被删（provider 还在但模型 id 没了），现在会回退默认模型，全灭时给新错误码 `no-model` 与可操作文案；② 端点**强制推理**（报 `400 Reasoning is mandatory for this endpoint and cannot be disabled`），现在先按模型档位直发，被拒后带档位重试一次（`maxReasoningOutputTokens` 2048）。详见 `docs/01` 附录 A8。
+
+> **0.2.3 改了什么**：**没有功能变化**。DSH 0.2.2 把内置会话菜单动作迁到 `ctx.contextMenus`（旧 Slot 降级为 legacy），本插件那一行因此从「重命名」下方下沉到「复制会话 ID」之后、「归档」之前；本版只同步文案/文档与 `dsh.compatibility.dshReleases` 兼容矩阵，代码路径、错误码与「确认后才写入」的承诺全部不变。详见 `docs/01` 附录 A9。
 
 `package.json` 里有两处声明，含义不同：
 
@@ -204,6 +207,9 @@ dsh plugin --profile <你的profile> add link:/绝对路径/dsh-session-titler
 - [`docs/RELEASE-CHECKLIST-0.2.0.md`](docs/RELEASE-CHECKLIST-0.2.0.md) —— 0.2.0 发版/验收打勾清单（含未完成的实机验收项）。
 - [`docs/RELEASE-CHECKLIST-0.2.1.md`](docs/RELEASE-CHECKLIST-0.2.1.md) —— 0.2.1 发版/验收打勾清单（修「确认修改」必崩，附录 A7）。
 - [`docs/RELEASE-CHECKLIST-0.2.2.md`](docs/RELEASE-CHECKLIST-0.2.2.md) —— 0.2.2 发版/验收打勾清单（修「已删模型不回退」与「强制推理端点 400」，附录 A8）。
+- [`docs/PLAN-2026-11-05.md`](docs/PLAN-2026-11-05.md) —— 0.2.3 方案（对齐 DSH 0.2.2-rc.1 的菜单位置与兼容声明），批准正文原样存档。
+- [`docs/RELEASE-CHECKLIST-0.2.3.md`](docs/RELEASE-CHECKLIST-0.2.3.md) —— 0.2.3 发版/验收打勾清单。
+- [`docs/COMPAT-2026-11-05-dsh-0.2.2-rc.1.md`](docs/COMPAT-2026-11-05-dsh-0.2.2-rc.1.md) —— DSH `0.2.2-rc.1` 兼容性核查（源码级契约比对，含逐项结论与验证清单）。
 
 ## License
 
