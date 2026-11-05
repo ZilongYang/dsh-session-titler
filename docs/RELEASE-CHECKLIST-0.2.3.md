@@ -3,7 +3,7 @@
 > 主题：**对齐 DSH 0.2.2-rc.1 的会话菜单行位置 + 补齐兼容矩阵**，无功能变化。
 > 方案见 `docs/PLAN-2026-11-05.md`；核查依据见 `docs/COMPAT-2026-11-05-dsh-0.2.2-rc.1.md` 与 `docs/01` 附录 **A9**。
 >
-> 发版日期：待验收通过后填写 ｜ 基线：待填写
+> 发版日期：2026-11-05 ｜ 基线：`bd8d88c`（`14a4ed6..bd8d88c`）
 
 ## 1. 代码 / 文案改动
 
@@ -26,25 +26,25 @@
 
 ### 3.1 桌面版 DSH `0.2.2-rc.1`（`desktop` profile）
 
-- [ ] 会话「…」菜单里「生成标题」位于「复制会话 ID」之后、「归档」之前。
-- [ ] 点它 → 弹窗打开、菜单关闭；取消 / Esc 不写任何数据。
-- [ ] 提案可编辑 →「确认修改」后标题真的改变，刷新仍在。
-- [ ] 顶栏「✦ 生成标题」位置与行为无回归；空白会话按钮置灰。
-- [ ] 窄窗口下顶栏按钮未被渐隐到不可点。
-- [ ] 插件页里本插件的描述文案已是 0.2.3 的新版（`locale` 生效）。
+- [x] 会话「…」菜单里「生成标题」位于「复制会话 ID」之后、「归档」之前。
+- [x] 点它 → 弹窗打开、菜单关闭；取消 / Esc 不写任何数据。
+- [x] 提案可编辑 →「确认修改」后标题真的改变，刷新仍在。
+- [x] 顶栏「✦ 生成标题」位置与行为无回归；空白会话按钮置灰。
+- [x] 窄窗口下顶栏按钮未被渐隐到不可点。
+- [x] 插件页里本插件的描述文案已是 0.2.3 的新版（`locale` 生效）。
 
 ### 3.2 CLI DSH `0.2.1-rc.5`（`main` / `web` profile，legacy 位置回归）
 
-- [ ] 「生成标题」仍在「重命名」下方、「分叉会话」上方（旧 Slot 语义未变）。
-- [ ] 点击 → 弹窗 →「确认修改」整条链路正常。
+- [x] 「生成标题」仍在「重命名」下方、「分叉会话」上方（旧 Slot 语义未变）。
+- [x] 点击 → 弹窗 →「确认修改」整条链路正常。
 
 ## 4. 发布（**验收通过后**才执行）
 
-- [ ] `dshReleases["0.2.2-rc.1"]` 改为 `compatible`，README 兼容表状态改为「已验证可用」。
-- [ ] `npm --cache /tmp/dsh-npm-cache publish`；以版本端点 `registry.npmjs.org/dsh-session-titler/0.2.3` 转 200 为准（CDN 负缓存约 10 分钟）。
-- [ ] `git commit`（`chore(release): 0.2.3 — …`）→ `git tag -a v0.2.3` → `gh release create`（tgz 资产）。
-- [ ] `git push origin main`。
-- [ ] `docs/02-open-source-and-marketplace.md` 补 0.2.3 发版记录。
+- [x] `dshReleases["0.2.2-rc.1"]` 改为 `compatible`，README 兼容表状态改为「已验证可用」。
+- [x] `npm --cache /tmp/dsh-npm-cache publish` → `+ dsh-session-titler@0.2.3`；版本端点在 **t+2 分钟**转 200，`dist-tags.latest = 0.2.3`，shasum `0238dbc6…` 与本地 pack 一致。
+- [x] `git commit`（`bd8d88c`）→ `git tag -a v0.2.3` → `gh release create`（tgz 资产 60 068 B，sha256 `0c07cb6c…`）。
+- [x] `git push origin main v0.2.3`（`14a4ed6..bd8d88c`）。
+- [x] `docs/02-open-source-and-marketplace.md` 补 0.2.3 发版记录。
 
 ## 5. 未覆盖 / 已知残留
 

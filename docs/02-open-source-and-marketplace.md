@@ -436,3 +436,29 @@ npm --cache /tmp/dsh-npm-cache publish
 - 社区市场**不需要**重新提 PR（列表按仓库自动收录）。
 - **GitHub Release（本版起新增渠道）**：tag `v0.2.2` + [Release 页面](https://github.com/ZilongYang/dsh-session-titler/releases/tag/v0.2.2)（中文说明 + tgz 资产，sha512 与 registry 逐字符一致）。首次上传误带了 CDN 未转正时的坏 tgz（21 字节），已删重传（55 824 B）。步骤已固化进「阶段 D'」；旧版本（0.1.x–0.2.1）按决定**不回溯** Release。
 
+
+### 0.2.3 发版记录（2026-11-05）
+
+**发版原因**：DSH `0.2.2-rc.1` 把内置会话菜单动作迁到 `ctx.contextMenus`，`sidebar.workspaces.session.menu.item` 被降级为 legacy 通道——本插件「生成标题」行从「重命名」下方下沉到「复制会话 ID」之后、「归档」之前。功能零破坏，本版只对齐文案与兼容矩阵。核查见 `docs/COMPAT-2026-11-05-dsh-0.2.2-rc.1.md`，结论与留档见 `docs/01` 附录 **A9**，方案见 `docs/PLAN-2026-11-05.md`。
+
+**提交与推送**：
+
+```sh
+# bd8d88c chore(release): 0.2.3 — align the session-menu copy with DSH 0.2.2 and extend the compatibility matrix
+git tag -a v0.2.3 -m "dsh-session-titler 0.2.3 — 对齐 DSH 0.2.2 的会话菜单位置与兼容声明"
+git push origin main v0.2.3        # 14a4ed6..bd8d88c
+```
+
+**发布**：
+
+```sh
+npm --cache /tmp/dsh-npm-cache publish
+```
+
+- 结果：`+ dsh-session-titler@0.2.3`，未触发 OTP。
+- 产物：**13 个文件**，`package size 60.1 kB / unpacked 160.2 kB`，shasum `0238dbc6…`，白名单与 0.2.2 相同（`test/` 不进包）。
+- 读接口滞后与「坑 2」一致：版本端点 `GET /dsh-session-titler/0.2.3` 在 **t+2 分钟**转 200（21:08:06），`dist-tags.latest` 由 `0.2.2` 变为 **`0.2.3`**，shasum 与本地 pack 一致。
+- 成品审计：tarball **13 个文件**；`package/package.json` 里 `0.2.2-rc.1: compatible`，`package/client.js` 为双版本位置描述，`package/title.js` 含 `LlmRuntime` 澄清注释，`version: 0.2.3`。
+- GitHub Release：[v0.2.3](https://github.com/ZilongYang/dsh-session-titler/releases/tag/v0.2.3)（中文说明 + tgz 资产 60 068 B；sha256 `0c07cb6c…` 与本地 tgz 一致，sha512 与 registry 逐字符一致）。
+- 本机：`desktop` / `main` / `web` 三个 profile 的拷贝安装均覆盖为 0.2.3（备份 `*.bak-0.2.3-20261105-204640` / `-205xxx`），桌面版 DSH `0.2.2-rc.1` 与 CLI DSH `0.2.1-rc.5` 均已实机验收通过。
+- 社区市场**不需要**重新提 PR（列表按仓库自动收录）。
